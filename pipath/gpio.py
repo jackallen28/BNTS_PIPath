@@ -11,6 +11,7 @@ SIM_ENV = {"GPIOZERO_PIN_FACTORY": "mock", "GPIOZERO_MOCK_PIN_CLASS": "mockpwmpi
 
 # What each gpiozero class looks like on the on-screen board
 BOARD_KIND = {
+    "Servo": "servo", "AngularServo": "servo",
     "LED": "led", "PWMLED": "led", "OutputDevice": "led", "DigitalOutputDevice": "led",
     "PWMOutputDevice": "led", "Buzzer": "buzzer", "TonalBuzzer": "buzzer",
     "Button": "button", "MotionSensor": "pir", "RGBLED": "rgbled", "DistanceSensor": "distance",
@@ -106,7 +107,7 @@ def wiring_parts(lesson: dict) -> list[dict]:
 def wiring_check_program(parts: list[dict]) -> str:
     """A tiny program that tests each part in turn and prints ✓ / ✗ lines the app can read."""
     lines = [
-        "from gpiozero import LED, Button, Buzzer, MotionSensor, RGBLED, DistanceSensor",
+        "from gpiozero import LED, Button, Buzzer, MotionSensor, RGBLED, DistanceSensor, Servo",
         "from time import sleep",
         "",
         'print("Checking your wiring, one part at a time.")',
@@ -118,6 +119,13 @@ def wiring_check_program(parts: list[dict]) -> str:
             lines += [f'print("Watch the {name} (GPIO{pin}): it should blink 3 times.")',
                       f"d = LED({pin})", "d.blink(0.3, 0.3, n=3, background=False)", "d.close()",
                       f'print("• {name} (GPIO{pin}) done. Did it blink? If not, check its long leg and resistor.")']
+        elif k == "servo":
+            lines += [f'print("Clear the gate before testing {name}.")',
+                      f"d = Servo({pin}, initial_value=None)",
+                      "for position in (-0.5, 0, 0.5, 0):",
+                      "    d.value = position", "    sleep(0.7)",
+                      "d.detach()", "d.close()",
+                      f'print("• {name} done. Did the arm move both ways and return to centre?")']
         elif k == "rgbled":
             lines += [f'print("Watch the {name}: red, then green, then blue.")',
                       f"d = RGBLED({pins[0]}, {pins[1]}, {pins[2]})",

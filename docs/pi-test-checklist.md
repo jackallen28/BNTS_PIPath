@@ -12,7 +12,7 @@ you have one.
 ## 1. Install and run the tests (10 min)
 
 ```
-git clone --depth 1 -b BNTS_PiPath https://github.com/jackallen28/jackallen.git ~/pipath
+git clone --depth 1 -b main https://github.com/jackallen28/BNTS_PIPath.git ~/pipath
 cd ~/pipath
 python3 -m unittest discover -s tests
 ```

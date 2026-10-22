@@ -1,0 +1,20 @@
+{
+  "repository": "https://github.com/fritzing/fritzing-parts",
+  "commit": "27535f2fd02097be9bed229b75aa8e9be282a4a0",
+  "licence": "CC-BY-SA-3.0",
+  "sources": {
+    "led": "svg/core/breadboard/LED-5mm-red-leg.svg",
+    "rgbled": "svg/core/breadboard/led-rgb-4pin-anode-leg.svg",
+    "button": "svg/core/breadboard/Pushbuttonc.svg",
+    "switch": "svg/core/breadboard/tilt_switch.svg",
+    "buzzer": "svg/core/breadboard/Buzzer-v15_breadboard.svg",
+    "distance": "svg/core/breadboard/hc-sr04_bf8299a_002.svg",
+    "pir": "svg/contrib/breadboard/PIR_sensor__723e9e78d3d1bdc76f4badecd521__breadboard__bde4d2a73b9c7784602c3b4f93cfb0ab_6B.svg",
+    "servo": "svg/core/breadboard/servo.svg",
+    "resistor": "svg/core/breadboard/resistor_220.svg",
+    "pi": "svg/core/breadboard/raspberry_pi_3_rev-1.2.svg",
+    "breadboard": "svg/core/breadboard/halfBreadboard.svg",
+    "usb": "svg/core/breadboard/usb_3.0_female_fix_breadboard.svg"
+  },
+  "changes": "PNG rasterisation; LED colour variants; resistor bands changed to 330 ohms. RGB package illustration has four leads; follow lesson terminal instructions for your common-cathode part."
+}

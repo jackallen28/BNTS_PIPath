@@ -30,6 +30,7 @@ from .tour import Tour
 from .widgets import (ChoiceList, CogButton, MenuBar, PButton, RichText, ScrollFrame, TitleBar, about_box, card,
                       chip, entry, label, window)
 from .wiring import WiringCard
+from .wiring_walkthrough import WiringWalkthrough
 
 DEMO_FILES = DATA_DIR / "demo_files"
 
@@ -730,6 +731,10 @@ class Workspace(Screen):
             self.runner.send_command(f"distance {pin} {cm}")
 
     def _on_gpio(self, msg: dict):
+        guide = getattr(self, "wiring_walkthrough", None)
+        if guide is not None and self._special == "wiring-guide":
+            guide.message(msg)
+            return
         t = msg.get("t")
         if t == "devices":
             if msg["devices"]:
@@ -852,7 +857,10 @@ class Workspace(Screen):
                 self._exit_code = ev[1]
         if out:
             text = "".join(out)
-            self.console.write(text)
+            if self._special == "wiring-guide" and getattr(self, "wiring_walkthrough", None) is not None:
+                self.wiring_walkthrough.append_output(text)
+            else:
+                self.console.write(text)
             self._out_tail, self._last_out = text[-1], time.monotonic()
         if errs:
             self._show_stderr("".join(errs))
@@ -867,6 +875,9 @@ class Workspace(Screen):
             self._poll_job = self.after(40, self._poll)
 
     def _show_stderr(self, text: str) -> None:
+        if self._special == "wiring-guide":
+            # The runner retains diagnostics for validation; generated source stays hidden.
+            return
         """Errors and warnings show as they happen, in red (like Thonny), without long folder names."""
         folder = (self._special_dir + "/") if self._special and self._special_dir else str(self.code_path().parent) + "/"
         self.console.write(text.replace(folder, ""), "err")
@@ -902,7 +913,11 @@ class Workspace(Screen):
             if self.board:
                 self.board.set_mode(self.mode)
             self.console.set_status("")
-            if reason == "user":               # stopped part-way: don't report it as finished
+            if kind == "wiring-guide":
+                guide = getattr(self, "wiring_walkthrough", None)
+                if guide is not None:
+                    guide.finished(self.runner.stdout, stderr, rc, reason)
+            elif reason == "user":               # stopped part-way: don't report it as finished
                 self.console.write("\n■ Stopped.\n", "info")
             else:
                 self.special_finished(kind, self.runner.stdout, stderr)
@@ -1002,6 +1017,9 @@ class LessonWorkspace(Workspace):
         self.topbar.set_text(self.lesson["title"], f"{tier['title']} activity  ·  {self.project['subtitle']}")
         self.file_lbl.configure(text=self.lesson["file_name"])
         self.level = app.student.help_level
+        self._wiring_approved = set()
+        self._wiring_pending = None
+        self.wiring_walkthrough = None
 
         # per-step state
         self.view = None
@@ -1047,11 +1065,13 @@ class LessonWorkspace(Workspace):
         else:
             self.enter_step(self.step_i)
 
-        if tour:
+        self._ensure_wiring_gate()
+        if tour and self.wiring_walkthrough is None:
             self.after(350, self.start_tour)
 
     def park(self) -> None:
         super().park()
+        self._close_wiring_gate()
         if getattr(self, "_adapt_job", None):
             self.after_cancel(self._adapt_job)
             self._adapt_job = None
@@ -1075,8 +1095,51 @@ class LessonWorkspace(Workspace):
         return self.view == "step" and self.steps[self.step_i].get("run_mode") == "until_stopped"
 
     def run(self):
+        if self._ensure_wiring_gate():
+            return
         if self.view == "step":            # the intro and the finish screen have nothing to run
             super().run()
+
+    def wiring_context(self):
+        return (self.lesson["id"], self.mode, self.camera if self.uses_camera() else None)
+
+    def _ensure_wiring_gate(self, continuation=None):
+        if self.level != "beginner" or not self.uses_gpio():
+            return False
+        context = self.wiring_context()
+        if context in getattr(self, "_wiring_approved", set()):
+            return False
+        if continuation is not None:
+            self._wiring_pending = continuation
+        guide = getattr(self, "wiring_walkthrough", None)
+        if guide is None:
+            settings = getattr(self.app, "_settings", None)
+            if settings is not None and settings.winfo_exists():
+                return True
+            self.run_btn.set_enabled(False)
+            self.wiring_walkthrough = WiringWalkthrough(self, self._wiring_done, self.go_home)
+        elif guide.context != context:
+            self._abandon_run()
+            guide.reset_context()
+        return True
+
+    def _close_wiring_gate(self):
+        guide = getattr(self, "wiring_walkthrough", None)
+        self.wiring_walkthrough = None
+        if guide is not None:
+            guide.destroy()
+
+    def _wiring_done(self, context):
+        guide = self.wiring_walkthrough
+        if guide is None or not guide.session.ready or context != self.wiring_context():
+            return
+        self._wiring_approved.add(context)
+        pending, self._wiring_pending = self._wiring_pending, None
+        self._close_wiring_gate()
+        self.console.clear()
+        self.run_btn.set_enabled(self.view == "step")
+        if pending is not None:
+            pending()
 
     # ---------------------------------------------------------------- help level
     def cycle_level(self):
@@ -1097,6 +1160,16 @@ class LessonWorkspace(Workspace):
                 if self.view == "step":
                     self._render_step(keep_coach=True)
                     self.coach.message("info", f"Help: {LEVEL_INFO[self.level][0]}", LEVEL_INFO[self.level][1])
+
+        if what in ("hardware", "help") and self.lesson is not None:
+            if what == "hardware":
+                self._wiring_approved.clear()
+            if self.level == "beginner":
+                self._ensure_wiring_gate()
+            else:
+                if self.wiring_walkthrough is not None:
+                    self._abandon_run()
+                    self._close_wiring_gate()
 
     # ---------------------------------------------------------------- left panel
     def _build_left(self):
@@ -1322,6 +1395,8 @@ class LessonWorkspace(Workspace):
     # ---------------------------------------------------------------- steps
     def enter_step(self, i: int, carry_code: str | None = None):
         """Go to step i. carry_code: code to start from (a skipped step's example answer)."""
+        if self._ensure_wiring_gate(lambda: self.enter_step(i, carry_code)):
+            return
         self._abandon_run()                # a program from the last step isn't checked against this one
         self._save_pending()               # so a backup has the newest code
         student = self.app.student
@@ -1716,6 +1791,8 @@ class LessonWorkspace(Workspace):
 
     # ---------------------------------------------------------------- goal demo + wiring check
     def watch_goal(self):
+        if self._ensure_wiring_gate():
+            return
         if self.view != "step":
             return
         step = self.steps[self.step_i]

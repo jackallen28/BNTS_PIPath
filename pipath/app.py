@@ -128,12 +128,16 @@ class PiPathApp(tk.Tk):
 
     def busy_with_dialog(self) -> bool:
         """Settings is open: keys like F5 shouldn't reach the screen behind."""
-        return self._settings is not None and self._settings.winfo_exists()
+        guide = getattr(self.screen, "wiring_walkthrough", None)
+        return ((self._settings is not None and self._settings.winfo_exists())
+                or (guide is not None and guide.winfo_exists()))
 
     def close_settings(self) -> None:
         if self._settings is not None and self._settings.winfo_exists():
             self._settings.close()
         self._settings = None
+        if self.screen is not None and hasattr(self.screen, "_ensure_wiring_gate"):
+            self.screen._ensure_wiring_gate()
 
     def settings_changed(self, what: str) -> None:
         """A setting changed: every kept screen updates itself (help, show, names, hardware, text)."""

@@ -92,6 +92,14 @@ def _patch_gpiozero(gz) -> None:
 
     gz.GPIODevice.__init__ = gpio_init
 
+    orig_servo = gz.Servo.__init__
+
+    def servo_init(self, *a, **kw):
+        orig_servo(self, *a, **kw)
+        _groups.append(weakref.ref(self))
+
+    gz.Servo.__init__ = servo_init
+
     orig_rgb = gz.RGBLED.__init__
 
     def rgb_init(self, *a, **kw):
@@ -185,6 +193,14 @@ def _snapshot():
     for ref in list(_groups):
         g = ref()
         if g is None or g.closed:
+            continue
+        if isinstance(g, _gz.Servo):
+            p = _bcm(g.pwm_device.pin)
+            if p is not None:
+                devs.append({"kind": "Servo", "pins": [p]})
+                pins[str(p)] = g.value
+                in_group.add(p)
+                skip.add(p)
             continue
         if isinstance(g, _gz.TonalBuzzer):     # one pin; "on" while it plays a note
             p = _bcm(g._all[0].pin) if g._all else None

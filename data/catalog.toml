@@ -586,3 +586,19 @@ gpio = true
 camera = true
 try_first = ["c1_photobooth"]
 parts = ["USB webcam or Raspberry Pi camera", "green + red LEDs + 2 x 330Ω", "1 push button", "breadboard + jumper wires", "two things to show the camera"]
+
+[[project]]
+id = "c3_waste_sorter"
+tier = "camera"
+title = "Waste Sorter"
+subtitle = "Train a camera, code a classifier and steer a servo sorting gate"
+concepts = ["labelled training data", "nearest neighbour", "held-out testing", "LEDs", "servo control"]
+curriculum = ["Data and Information: collect labelled images and evaluate predictions on unseen items", "Creating Digital Solutions: build and test a classifier and a physical sorting system", "Digital Systems: connect a USB camera, two LEDs and a positional servo"]
+stretch = ["Add an unsure result that leaves the gate centred.", "Record a confusion table and compare accuracy after retraining."]
+minutes = 120
+support = "guided → brief"
+status = "ready"
+gpio = true
+camera = true
+try_first = ["c1_photobooth", "c2_teachable"]
+parts = ["USB webcam", "red and green LEDs + two 330Ω resistors", "one positional hobby servo + teacher-approved external supply", "breadboard + jumper wires", "cardboard gate + two labelled bins", "clean waste and recycling samples"]

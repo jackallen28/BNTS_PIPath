@@ -292,7 +292,7 @@ def scenes(app):
                                            ("<MouseWheel>", {"delta": -3}), ("<MouseWheel>", {"delta": 120})),
                                check_wheel(app, app.screen.canvas, app.screen.hello, ("<Button-5>", {}),
                                            ("<MouseWheel>", {"delta": -3})),
-                               open_lesson("a1_traffic")(), app.update(),
+                               set_level("moderate")(), open_lesson("a1_traffic")(), app.update(),
                                check_wheel(app, app.screen.guide.canvas, app.screen.guide.body.winfo_children()[0],
                                            ("<Button-5>", {}), ("<MouseWheel>", {"delta": -2})),
                                check_wheel(app, app.screen.guide.canvas, app.screen.board,

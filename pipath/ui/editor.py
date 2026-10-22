@@ -58,6 +58,7 @@ class CodeEditor(tk.Frame):
         self._hl_job = None
         self._gutter_job = None
         self._br_job = None
+        self._goto_job = None
         self._suspend = False
         self._error_line = None
 
@@ -119,7 +120,7 @@ class CodeEditor(tk.Frame):
         t.bind("<<Paste>>", self._paste)
 
     def destroy(self):
-        for job in (self._hl_job, self._gutter_job, self._br_job):
+        for job in (self._hl_job, self._gutter_job, self._br_job, self._goto_job):
             if job:
                 self.after_cancel(job)
         super().destroy()
@@ -197,8 +198,14 @@ class CodeEditor(tk.Frame):
         t.see("insert")
         t.tag_remove("goto", "1.0", "end")
         t.tag_add("goto", f"{n}.0", f"{n}.0 lineend+1c")
-        self.after(1200, lambda: t.winfo_exists() and t.tag_remove("goto", "1.0", "end"))
+        if self._goto_job is not None:
+            self.after_cancel(self._goto_job)
+        self._goto_job = self.after(1200, self._clear_goto)
         t.focus_set()
+
+    def _clear_goto(self):
+        self._goto_job = None
+        self.text.tag_remove("goto", "1.0", "end")
 
     # ---------------------------------------------------------------- highlighting
     def highlight(self) -> None:

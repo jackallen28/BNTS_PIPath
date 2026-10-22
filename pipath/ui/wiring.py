@@ -7,6 +7,7 @@ import tkinter as tk
 from ..gpio import HEADER, SAFETY
 from .board import LED_COLOURS
 from .theme import C
+from .parts import part_image
 from .widgets import PButton, RichText, label
 
 POWER_COLOURS = {"5V": "#D7263D", "3V3": "#E07A00", "GND": "#1E2330", "ID": "#B4B0A6"}
@@ -74,6 +75,17 @@ class WiringCard(tk.Frame):
         self.connect.pack(fill="x", pady=(10, 0))
         self._render_connect()
 
+        # Recognisable component pictures, shared with the simulator and guided setup.
+        icons = tk.Canvas(b, bg=C["panel"], height=100, highlightthickness=0)
+        icons.pack(fill="x", pady=(8,0))
+        for i,p in enumerate(self.parts):
+            x, y = 44 + (i % 4)*84, 35 + (i // 4)*100
+            image = part_image(icons,p["kind"],p.get("colour","red"),64)
+            if image is not None:
+                icons.create_image(x,y,image=image)
+            icons.create_text(x,y+38,text=f"GPIO{'/'.join(map(str,p['pins']))}",font="small",fill=C["ink"])
+        icons.configure(height=max(1,(len(self.parts)+3)//4)*100)
+        label(b,"Part artwork: Fritzing contributors • CC BY-SA 3.0",font="small",fg=C["muted"]).pack(anchor="w")
         self._header_map(b)
         label(b, "Pin 1 is the corner pin nearest the SD card slot (it has a square pad underneath).",
               font="small", fg=C["muted"], bg=C["panel"], wraplength=330).pack(anchor="w", pady=(2, 0))

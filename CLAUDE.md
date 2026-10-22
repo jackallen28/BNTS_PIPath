@@ -1,5 +1,8 @@
 # PiPath: Python coding tutor for Raspberry Pi
 
+Repository: `jackallen28/BNTS_PIPath`. Open all pull requests against `main` in this repository.
+Use the existing task checkout; create a worktree only when the user explicitly requests one.
+
 > This file is the brief for Claude Code. Read it fully before changing anything.
 > It describes what PiPath is, what already exists, the rules to follow, the data
 > formats, the full curriculum, and what's left to build.
@@ -602,7 +605,7 @@ stick (`/media/*/PiPath-lessons/*.toml`) after validating them; a lesson lint co
 ## 10. Deployment
 
 - **Double-click installer** `Install-PiPath.desktop` (repo root): a launcher that downloads and runs
-  `tools/install_pipath.sh` from the `BNTS_PiPath` branch in a terminal window. The script installs
+  `tools/install_pipath.sh` from the `main` branch in a terminal window. The script installs
   or updates `~/pipath` (git fetch + checkout of the branch, local edits stashed; or a fresh shallow
   clone; or, without git, the branch zip swapped in), runs `install.sh`, then opens PiPath. It never
   touches `~/PiPath` (student work) and never asks for a GitHub login. `PIPATH_REPO`,

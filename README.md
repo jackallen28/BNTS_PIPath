@@ -26,7 +26,7 @@ switch to **Real Pi** and run the same code on their breadboard. In Real Pi mode
 ## Quick start (on the Pi)
 
 **Double-click installer:** on the Pi, open
-`https://raw.githubusercontent.com/jackallen28/jackallen/BNTS_PiPath/Install-PiPath.desktop` in the
+`https://raw.githubusercontent.com/jackallen28/BNTS_PIPath/main/Install-PiPath.desktop` in the
 browser and save it (right-click > Save as, or Ctrl+S), then double-click **Install-PiPath.desktop**
 in Downloads. If asked, choose **Execute** (or **Execute in Terminal**). A window shows the progress:
 it downloads the latest PiPath into `~/pipath`, adds **PiPath** (and **Update PiPath**) to the menu
@@ -36,20 +36,20 @@ under Programming and an icon to the desktop, then opens PiPath. Run it again (o
 Or in a Terminal (the same installer):
 
 ```
-curl -fsSL https://raw.githubusercontent.com/jackallen28/jackallen/BNTS_PiPath/tools/install_pipath.sh | bash
+curl -fsSL https://raw.githubusercontent.com/jackallen28/BNTS_PIPath/main/tools/install_pipath.sh | bash
 ```
 
 Or by hand:
 
 ```
-git clone --depth 1 -b BNTS_PiPath https://github.com/jackallen28/jackallen.git ~/pipath
+git clone --depth 1 -b main https://github.com/jackallen28/BNTS_PIPath.git ~/pipath
 cd ~/pipath
 ./install.sh                 # menu entry + desktop icon; ./install.sh --autostart also opens it at login
 python3 main.py              # add --scale 1.25 for larger text
 ```
 
 No internet on the Pi? Download
-`https://github.com/jackallen28/jackallen/archive/refs/heads/BNTS_PiPath.zip`
+`https://github.com/jackallen28/BNTS_PIPath/archive/refs/heads/main.zip`
 on another computer, copy it over on a USB stick, unzip it and run `./install.sh` in that folder.
 
 Needs Raspberry Pi OS Desktop (Bookworm or newer, Python 3.11+). Tkinter, gpiozero, lgpio and
@@ -254,3 +254,97 @@ python3 -m unittest discover -s tests
 Every step's model answer (its `demo`) is run, in the Simulator for GPIO and camera steps,
 with its button presses and typed answers, and must pass that step's own checklist. Screenshots of every main screen:
 `xvfb-run -s "-screen 0 1366x768x24" python3 tests/gui_smoke.py shots/`
+
+## Waste Sorter student project
+
+Open **Camera & AI → Waste Sorter** in the activity picker. Allow about 120 minutes
+across two or three sessions. The eight steps test the LEDs, test the servo, capture
+camera grids, collect labelled training data, code nearest-neighbour prediction,
+evaluate unseen samples and combine the parts in a sorting gate.
+
+Use a USB webcam, two LEDs (red GPIO17, green GPIO22), two 330Ω resistors and **one
+positional hobby servo** (signal GPIO18). The servo needs a teacher-approved separate
+regulated supply matched to its voltage/current rating and a common ground with the Pi.
+Do not connect external supply positive to Pi power pins. Test the bare servo before
+fitting a light cardboard pointer; keep hands clear. The lesson includes full physical
+pin connections and a wiring check. It is a supervised demonstration, not an automatic
+waste processing machine. The gate releases after returning to centre and cannot hold a load.
+
+Start in Simulator mode: **Ball represents waste; Box represents recycling**. On hardware,
+choose **USB** from the camera panel title. Use clean samples and local council bin rules.
+Students collect their own `waste_examples.json`; the activity does not install a pretrained
+waste recognition model. Tiny greyscale nearest-neighbour matching works best with a fixed
+camera and plain background, and can confuse unfamiliar objects or similar shapes.
+Keep test items separate from training and record both kinds of incorrect prediction.
+Watch the goal uses separate practice data, leaving student examples untouched.
+
+Before classroom use on a Pi, test both camera classes, both LEDs, both gate directions,
+return to centre, `q` and Stop; repeat under different lighting. Confirm the servo supply
+is stable and the mechanism cannot jam. Real hardware has not been validated by the cloud tests.
+
+## Beginner: connect, test, then code
+
+Beginner hardware and camera activities open an in-window wiring walkthrough before the
+code is accessible. Students identify each part, read what it does, follow the connections,
+and run a ready-made test whose source never appears in their editor. Buttons must be
+pressed and released; sensors must respond; LEDs, sound, servo movement and the camera
+must also be confirmed by the student. All tests must finish successfully and every
+observation must be ticked before **Open my code** is enabled. Failed or stopped checks
+can be retried. **Back to activities** leaves without unlocking the code.
+
+Simulator checks are practice, not proof that real wires are correct. Changing hardware
+mode or camera invalidates the current check. Reopening a hardware activity starts a new
+check. Moderate and Advanced keep the existing direct access to the coding workspace.
+Teachers can add `wire_steps = ["first connection", "next connection"]` to a lesson wiring
+row for separate connection pages; otherwise the existing connection text is shown.
+
+The simulator and wiring panels share bundled Fritzing breadboard artwork. Component
+pictures identify the package; the lesson's terminal names, physical pin numbers and
+resistor values determine the wiring. See `data/parts/fritzing/ATTRIBUTION.md` for the
+CC BY-SA 3.0 credit, original sources and image changes. Fritzing is not needed on a Pi.
+
+## Updates when PiPath opens
+
+On a Raspberry Pi, PiPath now checks the configured GitHub release branch **before**
+loading the application. A small progress window stays responsive. If a new version is
+installed, PiPath restarts once into it. Offline or failed checks open the installed
+version; student work in `~/PiPath` stays on the Pi. This launch check is the only new
+network use; lessons and the Coach still work offline and send no student data.
+
+The release source is now `jackallen28/BNTS_PIPath`, branch `main`.
+A Git installation updates only when that release branch is clean and can fast-forward.
+Local app edits, extra untracked files, local commits, a different origin or a development
+branch cause the automatic update to be skipped. Nothing is stashed, reset or force-switched.
+ZIP installations managed by the installer use a file manifest to detect local edits,
+validate the downloaded candidate before replacing files and retain a `pipath.before-update-*`
+backup alongside the installation. Unmanaged ZIP copies need one manual update first.
+Concurrent updates are locked; a second launch asks the user to reopen shortly.
+
+Use `python3 main.py --no-update` or `PIPATH_AUTO_UPDATE=0` for an offline-only launch.
+Development computers do not check automatically. Existing classroom Pis need to run
+**Programming → Update PiPath** once after this release is merged to install this feature.
+Future opens/reopens then check automatically. If that Pi is kept open all day, close and
+reopen PiPath to check again. Custom installs can use the existing `PIPATH_REPO` and
+`PIPATH_BRANCH` environment overrides; no GitHub token is required for the public release.
+
+Deployment: review and merge the feature branch into **main** in
+`jackallen28/BNTS_PIPath`. All future pull requests target this repository and branch. Before rolling out to the class, validate USB camera
+capture, all button/sensor checks, both LEDs and servo directions on one classroom Pi,
+then update the rest of the set. Cloud simulation cannot verify physical wiring or power.
+
+### Move an existing classroom Pi from the old repository
+
+After this release is merged into `jackallen28/BNTS_PIPath/main`, run the new installer
+once in a terminal (the old Update PiPath shortcut still points at the previous source):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jackallen28/BNTS_PIPath/main/tools/install_pipath.sh | bash
+```
+
+It installs in the existing `~/pipath` folder and keeps student work in `~/PiPath`.
+For an old Git installation it fetches the new repository, preserves the old HEAD on a
+backup branch, stashes local app edits including untracked files, and retains the old
+remote before selecting `main` from the new repository. The new desktop/menu entries
+then use the new checkout and its automatic launch updater. Backups are retained for
+teachers to recover app edits; they are not automatically reapplied over new app code.
+An old ZIP installation is also retained as a sibling backup when replaced.

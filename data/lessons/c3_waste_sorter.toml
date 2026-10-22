@@ -1,0 +1,634 @@
+id = "c3_waste_sorter"
+title = "Waste Sorter"
+file_name = "waste_sorter.py"
+requires_gpio = true
+requires_camera = true
+intro = """
+## Build a learning sorting gate
+Train a USB camera to tell your clean waste samples from your recycling samples. Code a nearest-neighbour classifier, then use two LEDs and a positional servo to point a cardboard gate towards the matching bin. Everything stays on this Pi and works offline.
+Start in the Simulator. **Ball means waste; Box means recycling** in this practice world. These are pretend labels, not real recycling rules. On your Pi, click the camera title and choose **USB**. Ask your teacher which clean items belong in each local bin. Never use sharp, dirty or hazardous rubbish.
+You will test each part, collect your own examples, code the prediction, test unseen items and join the parts together. Allow two or three lessons.
+"""
+outro = """
+## Test, improve, explain
+Your machine compares tiny greyscale pictures. It does not understand materials or local recycling rules. Similar shapes, new objects, shadows and a changed background can fool it. Keep a person checking every decision. Use only clean demonstration items, not real waste processing.
+Try more examples of different items, angles and lighting. Keep test items out of training. Compare the accuracy before and after retraining. Explain which mistakes matter most and why. Challenge: add an unsure result that keeps the gate centred when matches are too similar.
+"""
+[[wiring]]
+part = "USB camera"
+connect = "Plug into USB. Click the camera panel title and select USB on the real Pi. Keep it fixed above a plain background."
+[[wiring]]
+part = "Recycling LED"
+wire_steps = ["Connect GPIO22 (physical pin 15) to one end of a 330Ω resistor.", "Connect the other end of that resistor to the green LED long leg (+).", "Connect the green LED short leg (−) to GND (physical pin 6, or the common GND rail)."]
+kind = "led"
+pin = 22
+colour = "green"
+connect = "GPIO22 (physical pin 15) → 330Ω resistor → green LED long leg. Short leg → GND."
+[[wiring]]
+part = "Waste LED"
+wire_steps = ["Connect GPIO17 (physical pin 11) to one end of a second 330Ω resistor.", "Connect the other end of this resistor to the red LED long leg (+).", "Connect the red LED short leg (−) to the same GND rail. Each LED needs its own resistor."]
+kind = "led"
+pin = 17
+colour = "red"
+connect = "GPIO17 (physical pin 11) → 330Ω resistor → red LED long leg. Short leg → GND."
+[[wiring]]
+part = "Sorting servo"
+wire_steps = ["Use a positional hobby servo. Ask your teacher to choose a regulated external supply matched to its voltage and current rating. Keep the supply disconnected while wiring.", "Connect the servo signal wire to GPIO18 (physical pin 12). Check your servo wire colours with your teacher.", "Connect external supply positive to the servo power wire. Do not connect it to any Pi power or GPIO pin. Do not power the motor from GPIO or 3V3.", "Connect external supply negative to servo ground AND Pi GND (physical pin 6). The separate supply and Pi must share a ground.", "Ask your teacher to check the connections before replacing the blue HAT and reconnecting the external supply. Test the bare arm first; keep fingers clear. Fit a light cardboard pointer only after this test."]
+kind = "servo"
+pin = 18
+connect = "Use a positional hobby servo, not continuous rotation. Signal → GPIO18 (physical pin 12). Teacher supplies a separate regulated supply rated for the servo: positive → servo power, negative → servo ground AND Pi GND (physical pin 6). Never join external positive to the Pi power pins. Never power a servo from GPIO or 3V3. Check the servo's wire colours and voltage with your teacher."
+[[wiring]]
+part = "Before moving"
+connect = "Take the blue HAT off before changing wires; do not turn the Pi off. Disconnect the external servo supply while rewiring. Teacher checks before reconnecting. Test the bare servo first; fit a light cardboard gate only afterwards. Keep fingers clear. Start with small movements; stop if the gate jams or the servo buzzes."
+
+[[steps]]
+title = "Test the recycling LED"
+support = "guided"
+starter_mode = "replace"
+text = '''
+**Your task:** Wire only the green LED. Fill the blank with GPIO22. Run and check it lights for one second.
+'''
+starter = '''
+from gpiozero import LED
+from time import sleep
+with LED(___) as green:
+    green.on()
+    sleep(1)
+print("Green tested")
+'''
+demo = '''
+from gpiozero import LED
+from time import sleep
+with LED(22) as green:
+    green.on()
+    sleep(1)
+print("Green tested")
+'''
+hints = ["LED() needs the BCM GPIO number, not the physical pin number.", "Use LED(22) for the green LED."]
+success = "Part tested. Explain what you observed before moving on."
+
+[[steps.checks]]
+type = "runs_ok"
+label = "Your program runs"
+
+[[steps.checks]]
+type = "output_contains"
+label = "The green LED test finished"
+value = "Green tested"
+
+[[steps.checks]]
+type = "confirm"
+label = "I saw the green LED light"
+
+[[steps]]
+title = "Add the waste LED"
+support = "guided"
+starter_mode = "replace"
+text = '''
+**Your task:** Add the red LED on GPIO17 with its own resistor. Fill the blank to turn red on after green. Check both colours separately.
+'''
+starter = '''
+from gpiozero import LED
+from time import sleep
+with LED(22) as green, LED(17) as red:
+    green.on()
+    sleep(1)
+    green.off()
+    red.___()
+    sleep(1)
+print("Both LEDs tested")
+'''
+demo = '''
+from gpiozero import LED
+from time import sleep
+with LED(22) as green, LED(17) as red:
+    green.on()
+    sleep(1)
+    green.off()
+    red.on()
+    sleep(1)
+print("Both LEDs tested")
+'''
+hints = ["Turn green off before turning red on.", "Use red = LED(17), then red.on() and sleep(1)."]
+success = "Part tested. Explain what you observed before moving on."
+
+[[steps.checks]]
+type = "runs_ok"
+label = "Your program runs"
+
+[[steps.checks]]
+type = "output_contains"
+label = "Both LED tests finished"
+value = "Both LEDs tested"
+
+[[steps.checks]]
+type = "confirm"
+label = "Each LED lit on its own"
+
+[[steps]]
+title = "Test the servo on its own"
+support = "guided"
+starter_mode = "replace"
+text = '''
+**Your task:** Ask your teacher to check the separate servo supply and common ground. Test without a gate attached. Servo values go from -1 to 1; use -0.5, 0 and 0.5 first. Fill the blank with 18. The Simulator arm should move both ways. On hardware, stop if it jams. detach() releases the motor; it does not hold a gate shut.
+'''
+starter = '''
+from gpiozero import Servo
+from time import sleep
+with Servo(___, initial_value=None) as gate:
+    for position in (-0.5, 0, 0.5, 0):
+        gate.value = position
+        print("Gate", position)
+        sleep(0.7)
+    gate.detach()
+print("Servo tested")
+'''
+demo = '''
+from gpiozero import Servo
+from time import sleep
+with Servo(18, initial_value=None) as gate:
+    for position in (-0.5, 0, 0.5, 0):
+        gate.value = position
+        print("Gate", position)
+        sleep(0.7)
+    gate.detach()
+print("Servo tested")
+'''
+hints = ["Servo() needs the signal pin number. The external supply powers the motor.", "Use Servo(18, initial_value=None). Set gate.value to move it."]
+success = "Part tested. Explain what you observed before moving on."
+
+[[steps.checks]]
+type = "runs_ok"
+label = "Your program runs"
+
+[[steps.checks]]
+type = "output_contains"
+label = "Servo test finished"
+value = "Servo tested"
+
+[[steps.checks]]
+type = "confirm"
+label = "The arm moved both ways and returned to centre"
+
+[[steps]]
+title = "See the camera picture"
+support = "guided"
+starter_mode = "replace"
+text = '''
+**Your task:** Choose USB for a real webcam, or Simulated for practice. Run with an item on the plain background. A picture becomes 16 rows of brightness numbers. Change the item and run again.
+'''
+starter = '''
+from pipath_camera import Camera
+cam = Camera()
+for row in cam.capture_grid(16, 16):
+    print(row)
+print("Camera tested")
+'''
+demo = '''
+from pipath_camera import Camera
+cam = Camera()
+for row in cam.capture_grid(16, 16):
+    print(row)
+print("Camera tested")
+'''
+hints = ["Each row holds 16 brightness numbers from 0 to 255.", "Use cam.capture_grid(16, 16), keeping the webcam still."]
+success = "Part tested. Explain what you observed before moving on."
+
+[[steps.checks]]
+type = "runs_ok"
+label = "Your program runs"
+
+[[steps.checks]]
+type = "output_contains"
+label = "A camera grid was captured"
+value = "Camera tested"
+
+[[steps.checks]]
+type = "confirm"
+label = "I tried two different objects"
+
+[[steps]]
+title = "Train with labelled examples"
+support = "guided"
+starter_mode = "replace"
+text = '''
+**Your task:** Collect five waste and five recycling pictures. Use several clean items in each group and vary their angle. Keep the same plain background for both groups so the Pi learns the items, not the backdrop. Each Enter captures one picture; wait for its next prompt. This replaces only waste_examples.json in this activity. In the Simulator choose Ball for waste, then Box for recycling. Fill the blank with examples to save your training set.
+'''
+starter = '''
+from pipath_camera import Camera
+from time import sleep
+import json
+cam = Camera()
+examples = []
+for label in ("waste", "recycling"):
+    for number in range(5):
+        input(f"Show {label} sample {number + 1}, then press Enter: ")
+        sleep(1)  # keep the item still while the camera settles
+        pixels = []
+        for row in cam.capture_grid(16, 16):
+            pixels = pixels + row
+        examples.append({"label": label, "pixels": pixels})
+with open("waste_examples.json", "w") as f:
+    json.dump(___, f)
+print("Saved", len(examples), "training examples")
+'''
+demo = '''
+from pipath_camera import Camera
+from time import sleep
+import json
+cam = Camera()
+examples = []
+for label in ("waste", "recycling"):
+    for number in range(5):
+        input(f"Show {label} sample {number + 1}, then press Enter: ")
+        sleep(1)  # keep the item still while the camera settles
+        pixels = []
+        for row in cam.capture_grid(16, 16):
+            pixels = pixels + row
+        examples.append({"label": label, "pixels": pixels})
+with open("waste_examples.json", "w") as f:
+    json.dump(examples, f)
+print("Saved", len(examples), "training examples")
+'''
+hints = ["The list examples contains both the labels and the pixel numbers.", "Save the list with json.dump(examples, f)."]
+success = "Part tested. Explain what you observed before moving on."
+demo_events = ["0 show ball", "5.5 show box"]
+demo_input = "\n\n\n\n\n\n\n\n\n\n"
+
+[[steps.checks]]
+type = "runs_ok"
+label = "Your program runs"
+
+[[steps.checks]]
+type = "file_exists"
+label = "Your training file exists"
+value = "waste_examples.json"
+
+[[steps.checks]]
+type = "output_contains"
+label = "Ten labelled examples were collected"
+value = "Saved 10 training examples"
+
+[[steps]]
+title = "Code the learning rule"
+support = "scaffolded"
+starter_mode = "replace"
+text = '''
+**Your task:** The nearest neighbour is the training picture with the smallest sum of pixel differences. Fill the blank with best_distance. Run with both kinds of item. Your training file from the last step is needed; Watch the goal uses separate practice examples. A guess is a prediction, not proof that an item is recyclable.
+'''
+starter = '''
+from pipath_camera import Camera
+import json
+
+cam = Camera()
+
+with open("waste_examples.json") as f:
+    examples = json.load(f)
+
+def distance(a, b):
+    total = 0
+    for x, y in zip(a, b):
+        total = total + abs(x - y)
+    return total
+
+def classify(pixels):
+    """Find the example that looks most like these pixels, and return its label."""
+    best_label = None
+    best_distance = None
+    for ex in examples:
+        d = distance(pixels, ex["pixels"])
+        if best_distance is None or d < ___:
+            best_distance = d
+            best_label = ex["label"]
+    return best_label
+
+def snap():
+    """Take a 16 x 16 picture and join its rows into one list of 256 numbers."""
+    grid = cam.capture_grid(16, 16)
+    pixels = []
+    for row in grid:
+        pixels = pixels + row
+    return pixels
+
+guess = classify(snap())
+print("Prediction:", guess)
+'''
+demo = '''
+from pipath_camera import Camera
+import json
+
+cam = Camera()
+
+with open("waste_examples.json") as f:
+    examples = json.load(f)
+
+def distance(a, b):
+    total = 0
+    for x, y in zip(a, b):
+        total = total + abs(x - y)
+    return total
+
+def classify(pixels):
+    """Find the example that looks most like these pixels, and return its label."""
+    best_label = None
+    best_distance = None
+    for ex in examples:
+        d = distance(pixels, ex["pixels"])
+        if best_distance is None or d < best_distance:
+            best_distance = d
+            best_label = ex["label"]
+    return best_label
+
+def snap():
+    """Take a 16 x 16 picture and join its rows into one list of 256 numbers."""
+    grid = cam.capture_grid(16, 16)
+    pixels = []
+    for row in grid:
+        pixels = pixels + row
+    return pixels
+
+guess = classify(snap())
+print("Prediction:", guess)
+'''
+hints = ["A smaller distance means a closer match.", "Compare d < best_distance so the closest example wins."]
+success = "Part tested. Explain what you observed before moving on."
+demo_files = ["c3/waste_examples.json"]
+error_hints = { FileNotFoundError = "Collect and save your own training examples in step 5 first." }
+
+[[steps.checks]]
+type = "runs_ok"
+label = "Your program runs"
+
+[[steps.checks]]
+type = "output_regex"
+label = "Your classifier made a prediction"
+value = "Prediction: (waste|recycling)"
+
+[[steps]]
+title = "Test items it has not learned"
+support = "scaffolded"
+starter_mode = "replace"
+text = '''
+**Your task:** Set aside four test items or new views before training. Do not add these pictures to the training set. Type the true bin for each item BEFORE the prediction. Fill the accuracy blank with the number of trials. Record the accuracy and both kinds of mistake. Retrain with better examples, then compare on a fresh test set. Low accuracy is useful evidence; it is not a reason to change the true labels. The demo uses Ball practice pictures only, not real waste.
+'''
+starter = '''
+from pipath_camera import Camera
+import json
+
+cam = Camera()
+
+with open("waste_examples.json") as f:
+    examples = json.load(f)
+
+def distance(a, b):
+    total = 0
+    for x, y in zip(a, b):
+        total = total + abs(x - y)
+    return total
+
+def classify(pixels):
+    """Find the example that looks most like these pixels, and return its label."""
+    best_label = None
+    best_distance = None
+    for ex in examples:
+        d = distance(pixels, ex["pixels"])
+        if best_distance is None or d < best_distance:
+            best_distance = d
+            best_label = ex["label"]
+    return best_label
+
+def snap():
+    """Take a 16 x 16 picture and join its rows into one list of 256 numbers."""
+    grid = cam.capture_grid(16, 16)
+    pixels = []
+    for row in grid:
+        pixels = pixels + row
+    return pixels
+
+correct = 0
+for trial in range(4):
+    actual = input("Show an UNSEEN item. Type waste or recycling, then Enter: ").strip().lower()
+    while actual not in ("waste", "recycling"):
+        actual = input("Type waste or recycling: ").strip().lower()
+    guess = classify(snap())
+    print("Actual:", actual, "Prediction:", guess)
+    if guess == actual:
+        correct = correct + 1
+print("Correct:", correct, "out of 4")
+print("Accuracy:", correct / ___ * 100, "%")
+'''
+demo = '''
+from pipath_camera import Camera
+import json
+
+cam = Camera()
+
+with open("waste_examples.json") as f:
+    examples = json.load(f)
+
+def distance(a, b):
+    total = 0
+    for x, y in zip(a, b):
+        total = total + abs(x - y)
+    return total
+
+def classify(pixels):
+    """Find the example that looks most like these pixels, and return its label."""
+    best_label = None
+    best_distance = None
+    for ex in examples:
+        d = distance(pixels, ex["pixels"])
+        if best_distance is None or d < best_distance:
+            best_distance = d
+            best_label = ex["label"]
+    return best_label
+
+def snap():
+    """Take a 16 x 16 picture and join its rows into one list of 256 numbers."""
+    grid = cam.capture_grid(16, 16)
+    pixels = []
+    for row in grid:
+        pixels = pixels + row
+    return pixels
+
+correct = 0
+for trial in range(4):
+    actual = input("Show an UNSEEN item. Type waste or recycling, then Enter: ").strip().lower()
+    while actual not in ("waste", "recycling"):
+        actual = input("Type waste or recycling: ").strip().lower()
+    guess = classify(snap())
+    print("Actual:", actual, "Prediction:", guess)
+    if guess == actual:
+        correct = correct + 1
+print("Correct:", correct, "out of 4")
+print("Accuracy:", correct / 4 * 100, "%")
+'''
+hints = ["Use a new item or view, not a saved training picture.", "Accuracy is correct / 4 * 100. Record wrong guesses too."]
+success = "Part tested. Explain what you observed before moving on."
+demo_input = "waste\nwaste\nwaste\nwaste\n"
+demo_files = ["c3/waste_examples.json"]
+error_hints = { FileNotFoundError = "Collect and save your own training examples in step 5 first." }
+
+[[steps.checks]]
+type = "runs_ok"
+label = "Your program runs"
+
+[[steps.checks]]
+type = "output_contains"
+label = "Four held-out trials completed"
+value = "out of 4"
+
+[[steps.checks]]
+type = "output_contains"
+label = "Accuracy was calculated"
+value = "Accuracy:"
+
+[[steps.checks]]
+type = "confirm"
+label = "I recorded errors for both waste and recycling on unseen items"
+
+[[steps]]
+title = "Build your sorting gate"
+support = "brief"
+starter_mode = "replace"
+run_mode = "until_stopped"
+text = '''
+**Your task:** Join the tested parts. With teacher help fit a light cardboard pointer, leaving space for both movements. Check +0.5 points towards recycling and -0.5 towards waste BEFORE placing items. Swap the sign in code or move the bin labels if needed. Fill the blank with the condition for recycling. Run with both groups: green and right for recycling; red and left for waste. The gate returns to centre, then releases. This is a supervised pointer, not a load-bearing trapdoor. Type q to quit, or Stop. Test new items and keep a human checking each prediction.
+'''
+starter = '''
+from gpiozero import LED, Servo
+from time import sleep
+from pipath_camera import Camera
+import json
+
+cam = Camera()
+
+with open("waste_examples.json") as f:
+    examples = json.load(f)
+
+def distance(a, b):
+    total = 0
+    for x, y in zip(a, b):
+        total = total + abs(x - y)
+    return total
+
+def classify(pixels):
+    """Find the example that looks most like these pixels, and return its label."""
+    best_label = None
+    best_distance = None
+    for ex in examples:
+        d = distance(pixels, ex["pixels"])
+        if best_distance is None or d < best_distance:
+            best_distance = d
+            best_label = ex["label"]
+    return best_label
+
+def snap():
+    """Take a 16 x 16 picture and join its rows into one list of 256 numbers."""
+    grid = cam.capture_grid(16, 16)
+    pixels = []
+    for row in grid:
+        pixels = pixels + row
+    return pixels
+
+with LED(22) as green, LED(17) as red, Servo(18, initial_value=None) as gate:
+    try:
+        while True:
+            command = input("Place one item, then Enter to sort (q to quit): ").strip().lower()
+            if command == "q":
+                break
+            guess = classify(snap())
+            print("Prediction:", guess)
+            green.value = guess == "recycling"
+            red.value = guess == "waste"
+            gate.value = 0.5 if ___ else -0.5
+            sleep(1)
+            gate.value = 0
+            sleep(0.5)
+            gate.detach()
+            green.off()
+            red.off()
+    finally:
+        green.off()
+        red.off()
+        gate.detach()
+print("Sorter stopped")
+'''
+demo = '''
+from gpiozero import LED, Servo
+from time import sleep
+from pipath_camera import Camera
+import json
+
+cam = Camera()
+
+with open("waste_examples.json") as f:
+    examples = json.load(f)
+
+def distance(a, b):
+    total = 0
+    for x, y in zip(a, b):
+        total = total + abs(x - y)
+    return total
+
+def classify(pixels):
+    """Find the example that looks most like these pixels, and return its label."""
+    best_label = None
+    best_distance = None
+    for ex in examples:
+        d = distance(pixels, ex["pixels"])
+        if best_distance is None or d < best_distance:
+            best_distance = d
+            best_label = ex["label"]
+    return best_label
+
+def snap():
+    """Take a 16 x 16 picture and join its rows into one list of 256 numbers."""
+    grid = cam.capture_grid(16, 16)
+    pixels = []
+    for row in grid:
+        pixels = pixels + row
+    return pixels
+
+with LED(22) as green, LED(17) as red, Servo(18, initial_value=None) as gate:
+    try:
+        while True:
+            command = input("Place one item, then Enter to sort (q to quit): ").strip().lower()
+            if command == "q":
+                break
+            guess = classify(snap())
+            print("Prediction:", guess)
+            green.value = guess == "recycling"
+            red.value = guess == "waste"
+            gate.value = 0.5 if guess == "recycling" else -0.5
+            sleep(1)
+            gate.value = 0
+            sleep(0.5)
+            gate.detach()
+            green.off()
+            red.off()
+    finally:
+        green.off()
+        red.off()
+        gate.detach()
+print("Sorter stopped")
+'''
+hints = ["The green LED already uses the recycling comparison.", "Use 0.5 if guess == \"recycling\" else -0.5 for the gate."]
+success = "Part tested. Explain what you observed before moving on."
+demo_input = "\nq\n"
+demo_files = ["c3/waste_examples.json"]
+error_hints = { FileNotFoundError = "Collect and save your own training examples in step 5 first." }
+
+[[steps.checks]]
+type = "runs_ok"
+label = "Your program runs"
+
+[[steps.checks]]
+type = "output_regex"
+label = "The camera drove a sorting decision"
+value = "Prediction: (waste|recycling)"
+
+
+[[steps.checks]]
+type = "confirm"
+label = "I tested both routes, their LEDs and the return to centre"

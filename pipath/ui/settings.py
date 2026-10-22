@@ -59,6 +59,10 @@ class SettingsDialog(tk.Frame):
             pass
         self.unbind_all("<Escape>")
         self.destroy()
+        self.app._settings = None
+        screen = self.app.screen
+        if screen is not None and hasattr(screen, "_ensure_wiring_gate"):
+            screen._ensure_wiring_gate()
 
     # ---------------------------------------------------------------- tabs
     def show_tab(self, key: str) -> None:

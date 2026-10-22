@@ -2,7 +2,7 @@
 # Install PiPath on a Raspberry Pi, or update it to the latest version.
 #
 #   Double-click "Install-PiPath.desktop" (it downloads and runs this), or in a Terminal:
-#   curl -fsSL https://raw.githubusercontent.com/jackallen28/jackallen/BNTS_PiPath/tools/install_pipath.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/jackallen28/BNTS_PIPath/main/tools/install_pipath.sh | bash
 #
 # What it does:
 #   1. downloads the latest PiPath into ~/pipath (git if it's there, otherwise a zip)
@@ -12,8 +12,8 @@
 # Change PIPATH_DIR / PIPATH_BRANCH / PIPATH_REPO to install somewhere else or from another branch.
 set -uo pipefail
 
-REPO="${PIPATH_REPO:-jackallen28/jackallen}"
-BRANCH="${PIPATH_BRANCH:-BNTS_PiPath}"
+REPO="${PIPATH_REPO:-jackallen28/BNTS_PIPath}"
+BRANCH="${PIPATH_BRANCH:-main}"
 DIR="${PIPATH_DIR:-$HOME/pipath}"
 GIT_URL="https://github.com/$REPO.git"
 ZIP_URL="https://github.com/$REPO/archive/refs/heads/$BRANCH.zip"
@@ -22,7 +22,7 @@ export GIT_TERMINAL_PROMPT=0          # never stop to ask for a GitHub login
 say()  { printf '\n\033[1;36m%s\033[0m\n' "$*"; }
 fail() {
   printf '\n\033[1;31m%s\033[0m\n' "$*"
-  echo "Nothing was changed on this Pi, and students' work is safe."
+  echo "Students' work in ~/PiPath has not been touched. Keep any backup branch, stash or previous installation shown above."
   exit 1
 }
 
@@ -44,15 +44,37 @@ fetch() {   # fetch URL FILE
 }
 
 # ---------------------------------------------------------------- download
-if [ -d "$DIR/.git" ] && command -v git >/dev/null; then
+if [ -e "$DIR/.git" ] && command -v git >/dev/null; then
   say "Updating PiPath in $DIR ..."
   cd "$DIR" || fail "Can't open $DIR."
-  git fetch --depth 1 origin "$BRANCH" || fail "Couldn't download the update. Is this Pi on the internet?"
-  if ! git diff --quiet || ! git diff --cached --quiet; then
-    stash="before-update-$(date +%Y%m%d-%H%M%S)"
-    git stash push -q -m "$stash" && echo "Your own changes to PiPath's files were put aside (git stash: $stash)."
+  source_url="$(git config --get remote.origin.url 2>/dev/null || true)"
+  migrate=0
+  case "$source_url" in
+    "$GIT_URL"|"https://github.com/$REPO"|"git@github.com:$REPO.git"|"ssh://git@github.com/$REPO.git") ;;
+    "https://github.com/jackallen28/jackallen.git"|"https://github.com/jackallen28/jackallen"|"git@github.com:jackallen28/jackallen.git")
+      [ "$REPO" = "jackallen28/BNTS_PIPath" ] || fail "This folder uses a different repository. Set PIPATH_DIR to a new folder."
+      migrate=1 ;;
+    *) fail "This folder uses a different repository. Set PIPATH_DIR to a new folder." ;;
+  esac
+  # Fetch the requested source explicitly: the old origin has no main branch.
+  git fetch --depth 1 "$GIT_URL" "$BRANCH" || fail "Couldn't download the update. Is this Pi on the internet?"
+  backup="pipath-backup-$(date +%Y%m%d-%H%M%S)-$$"
+  git branch "$backup" HEAD || fail "Couldn't preserve the current app version."
+  echo "Previous app commits are preserved on branch: $backup"
+  if ! git diff --quiet || ! git diff --cached --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then
+    stash="before-update-$(date +%Y%m%d-%H%M%S)-$$"
+    git stash push --include-untracked -q -m "$stash" || fail "Couldn't preserve your local app edits."
+    echo "Local app edits and untracked files are preserved in git stash: $stash"
   fi
-  git checkout -q -B "$BRANCH" FETCH_HEAD || fail "Couldn't switch to the new version."
+  git checkout -q -B "$BRANCH" FETCH_HEAD || fail "Couldn't switch to the new version. Your previous version and edits are backed up."
+  if [ "$migrate" = "1" ]; then
+    previous="pipath-previous-source-$(date +%Y%m%d-%H%M%S)-$$"
+    git remote rename origin "$previous" || fail "Couldn't preserve the old remote."
+    git remote add origin "$GIT_URL" || fail "Couldn't select the new repository."
+    echo "Old repository settings retained as remote: $previous"
+  fi
+  git update-ref "refs/remotes/origin/$BRANCH" FETCH_HEAD || fail "Couldn't record the new release."
+  git branch --set-upstream-to="origin/$BRANCH" "$BRANCH" >/dev/null || fail "Couldn't track the new release branch."
 elif command -v git >/dev/null && [ ! -e "$DIR" ]; then
   say "Downloading PiPath into $DIR ..."
   git clone -q --depth 1 -b "$BRANCH" "$GIT_URL" "$DIR" || fail "Couldn't download PiPath. Is this Pi on the internet?"
@@ -69,7 +91,18 @@ else
     mv "$DIR" "$old" || fail "Can't move the old version out of the way."
   fi
   mv "$new" "$DIR" || { [ -n "${old:-}" ] && mv "$old" "$DIR"; fail "Can't put the new version in $DIR."; }
-  [ -n "${old:-}" ] && rm -rf "$old"
+  [ -n "${old:-}" ] && echo "Previous installation retained at $old."
+fi
+
+# Record managed ZIP installations so launch updates can detect and preserve local edits.
+if [ ! -e "$DIR/.git" ]; then
+  (cd "$DIR" && python3 - "$REPO" "$BRANCH" <<'PYMANIFEST'
+import sys
+from pathlib import Path
+from pipath.updater import write_archive_manifest
+write_archive_manifest(Path.cwd(),sys.argv[1],sys.argv[2])
+PYMANIFEST
+  ) || fail "Could not record the installation version."
 fi
 
 # ---------------------------------------------------------------- menu, desktop icon, quick start
@@ -81,7 +114,8 @@ bash ./install.sh || fail "The menu and desktop icon couldn't be added."
 version="$(git -C "$DIR" log -1 --format='%h, %cd' --date=short 2>/dev/null || date +%Y-%m-%d)"
 say "Done! PiPath is installed ($version)."
 echo "Open it from the desktop icon, or the menu: Programming > PiPath."
-echo "To update later: menu > Programming > Update PiPath (needs the internet)."
+echo "PiPath checks for updates when opened on a Raspberry Pi. It also works offline."
+echo "For a manual update: menu > Programming > Update PiPath (needs the internet)."
 
 if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && [ -z "${PIPATH_NO_LAUNCH:-}" ]; then
   say "Opening PiPath ..."

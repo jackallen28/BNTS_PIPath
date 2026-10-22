@@ -9,12 +9,14 @@ breadboard does".
 from __future__ import annotations
 
 import tkinter as tk
+import math
 
 import os
 
 from ..gpio import BOARD_KIND, CAMERA_KINDS, INPUT_KINDS, SIM_OBJECTS
 from .theme import C
 from .widgets import PButton
+from .parts import part_image
 
 BG = "#17261E"          # dark circuit-board green
 HOLE = "#22382C"
@@ -50,7 +52,7 @@ class VirtualBoard(tk.Frame):
         self.mode = "sim"
         self.parts: list[dict] = []        # from the lesson's [[wiring]] rows
         self.live_parts: list[dict] = []   # devices the running program actually made
-        self.values: dict[int, float] = {}
+        self.values: dict[int, float | None] = {}
         self.items: list[tuple[dict, dict]] = []
         self.held: set[int] = set()
         self._pir_jobs: dict[int, str] = {}
@@ -120,7 +122,7 @@ class VirtualBoard(tk.Frame):
             self._schedule_redraw()
 
     def set_values(self, values: dict) -> None:
-        new = {int(k): float(v) for k, v in values.items()}
+        new = {int(k): None if v is None else float(v) for k, v in values.items()}
         if new != self.values:
             self.values = new
             self._paint()
@@ -299,50 +301,24 @@ class VirtualBoard(tk.Frame):
         r = s * .17
         ids: dict = {}
         tag = f"in{p['pins'][0]}"
-        if k in ("led", "rgbled"):
-            ids["glow"] = cv.create_oval(cx - r * 1.9, cy - r * 1.9, cx + r * 1.9, cy + r * 1.9, fill=BG, outline="")
-            cv.create_line(cx - r * .4, cy + r, cx - r * .4, cy + r * 2.0, fill="#9AA3A8", width=2)
-            cv.create_line(cx + r * .4, cy + r, cx + r * .4, cy + r * 1.7, fill="#9AA3A8", width=2)
-            ids["body"] = cv.create_oval(cx - r, cy - r, cx + r, cy + r, outline="#0B120E", width=2)
-        elif k == "buzzer":
-            ids["body"] = cv.create_oval(cx - r * 1.2, cy - r * 1.2, cx + r * 1.2, cy + r * 1.2,
-                                         fill="#111417", outline="#3A4248", width=2)
-            cv.create_oval(cx - r * .25, cy - r * .25, cx + r * .25, cy + r * .25, fill="#2A3036", outline="")
-            ids["waves"] = [cv.create_arc(cx - r * f, cy - r * f, cx + r * f, cy + r * f, start=st, extent=60,
-                                          style="arc", outline="#FFD866", width=2, state="hidden")
-                            for f in (1.6, 2.1) for st in (-30, 150)]
-        elif k in ("button", "switch"):
-            cv.create_rectangle(cx - r * 1.3, cy - r * 1.3, cx + r * 1.3, cy + r * 1.3,
-                                fill="#2B2F36", outline="#0B120E", width=2, tags=tag)
-            ids["cap"] = cv.create_oval(cx - r * .9, cy - r * .9, cx + r * .9, cy + r * .9,
-                                        outline="#0B120E", width=2, tags=tag)
-        elif k == "pir":
-            ids["ring"] = cv.create_oval(cx - r * 1.6, cy - r * 1.6, cx + r * 1.6, cy + r * 1.6, outline="", width=3)
-            cv.create_rectangle(cx - r * 1.3, cy - r * .2, cx + r * 1.3, cy + r * 1.1, fill="#2F6B3F",
-                                outline="#0B120E", width=2, tags=tag)
-            ids["dome"] = cv.create_oval(cx - r, cy - r * 1.1, cx + r, cy + r * .7, fill="#F2F2EE",
-                                         outline="#B8B8B0", width=2, tags=tag)
-        elif k == "distance":
-            # an HC-SR04: a blue board with two silver "eyes", the distance above it
-            w2 = r * 2.4
-            cv.create_rectangle(cx - w2, cy - r * 1.05, cx + w2, cy + r * 1.05, fill="#1F5FA8", outline="#0B120E",
-                                width=2)
-            for dx in (-1.25, 1.25):
-                cv.create_oval(cx + dx * r - r * .85, cy - r * .85, cx + dx * r + r * .85, cy + r * .85,
-                               fill="#C9CCD1", outline="#6B7078", width=2)
-                cv.create_oval(cx + dx * r - r * .45, cy - r * .45, cx + dx * r + r * .45, cy + r * .45,
-                               fill="#3A3F46", outline="")
-            ids["reading"] = cv.create_text(cx, cy - r * 1.75, text="", fill="#FFE680", font="small_bold")
-            # Simulator: a slider to move something closer (left) or further away (right)
-            x0, x1, ty = cx - w2, cx + w2, cy + r * 1.75
+        # Artwork is shared across the wiring guide, card and live board.
+        ids["ring"] = cv.create_rectangle(cx - s*.36, cy - s*.34, cx + s*.36, cy + s*.34,
+                                          outline=BG, width=3, tags=tag)
+        image = part_image(cv, k, p.get("colour", "red"), max(24, int(s * .63)))
+        if image is not None:
+            ids["image"] = cv.create_image(cx, cy, image=image, tags=tag)
+        ids["reading"] = cv.create_text(cx, cy + s*.35, text="", fill=INK, font="small")
+        if k == "servo":
+            ids["arm"] = cv.create_line(cx, cy, cx, cy-r*1.7, fill="#FFE680", width=3)
+        if k == "distance":
+            cv.coords(ids["reading"], cx, cy-s*.35)
+            x0, x1, ty = cx - s*.35, cx + s*.35, cy + s*.28
             dtag = f"dist{p['pins'][0]}"
             ids["track"] = cv.create_line(x0, ty, x1, ty, fill="#5D7A68", width=5, tags=dtag)
             ids["knob"] = cv.create_rectangle(0, 0, 0, 0, fill=C["teal"], outline="#FFFFFF", tags=dtag)
             ids["track_x"], ids["track_y"] = (x0, x1), ty
             cv.tag_bind(dtag, "<ButtonPress-1>", lambda e, pp=p, ii=ids: self._slide(pp, ii, e.x))
             cv.tag_bind(dtag, "<B1-Motion>", lambda e, pp=p, ii=ids: self._slide(pp, ii, e.x))
-            cv.tag_bind(dtag, "<Enter>", lambda e: self.canvas.configure(cursor="sb_h_double_arrow"))
-            cv.tag_bind(dtag, "<Leave>", lambda e: self.canvas.configure(cursor=""))
         name = p.get("label", k).split(" (")[0]
         fit = max(4, int(s / 8.5))
         if len(name) > fit:
@@ -367,29 +343,26 @@ class VirtualBoard(tk.Frame):
             if ids.get("state") == state:
                 continue
             ids["state"] = state
-            if k == "led":
-                v = self.values.get(pins[0], 0.0)
-                on = LED_COLOURS.get(p.get("colour", "red"), LED_COLOURS["red"])
-                cv.itemconfigure(ids["body"], fill=_mix(_mix(on, "#000000", .7), on, v))
-                cv.itemconfigure(ids["glow"], fill=_mix(BG, on, v * .45))
-            elif k == "rgbled":
-                rgb = [self.values.get(x, 0.0) for x in pins[:3]]
-                lit = max(rgb, default=0.0)
-                col = "#" + "".join(f"{round(255 * c):02x}" for c in rgb) if lit else "#3C3C3C"
-                cv.itemconfigure(ids["body"], fill=col)
-                cv.itemconfigure(ids["glow"], fill=_mix(BG, col, lit * .45) if lit else BG)
-            elif k == "buzzer":
-                on = self.values.get(pins[0], 0.0) > 0
-                for a in ids["waves"]:
-                    cv.itemconfigure(a, state="normal" if on else "hidden")
-            elif k in ("button", "switch"):
-                down = self.values.get(pins[0], 0.0) > 0 or pins[0] in self.held
-                cv.itemconfigure(ids["cap"], fill="#7A1020" if down else "#D7263D")
-                cx, cy, r = ids["cx"], ids["cy"], ids["r"] * (.75 if down else .9)
-                cv.coords(ids["cap"], cx - r, cy - r, cx + r, cy + r)
-            elif k == "pir":
-                on = self.values.get(pins[0], 0.0) > 0 or pins[0] in self.held
-                cv.itemconfigure(ids["ring"], outline="#FFB000" if on else "")
+            value = self.values.get(pins[0])
+            active = any((self.values.get(pin) or 0) > 0 for pin in pins) or pins[0] in self.held
+            if k in ("led", "rgbled"):
+                colour = LED_COLOURS.get(p.get("colour", "red"), "#FF3B30")
+                if k == "rgbled":
+                    rgb = [max(0, min(1, self.values.get(pin) or 0)) for pin in pins[:3]]
+                    colour = "#" + "".join(f"{round(v*255):02x}" for v in rgb)
+                cv.itemconfigure(ids["ring"], outline=colour if active else BG)
+                cv.itemconfigure(ids["reading"], text="ON" if active else "OFF")
+            elif k in ("button", "switch", "pir", "buzzer"):
+                cv.itemconfigure(ids["ring"], outline="#FFE680" if active else BG)
+                words = {"button":("Pressed", "Released"), "switch":("Active", "Open"),
+                         "pir":("Motion", "Waiting"), "buzzer":("Sounding", "Quiet")}
+                cv.itemconfigure(ids["reading"], text=words[k][0 if active else 1])
+            elif k == "servo":
+                cx, cy, r = ids["cx"], ids["cy"], ids["r"]
+                angle = (value or 0) * math.pi / 2
+                cv.coords(ids["arm"], cx, cy, cx + math.sin(angle)*r*1.7, cy-math.cos(angle)*r*1.7)
+                cv.itemconfigure(ids["arm"], state="hidden" if value is None else "normal")
+                cv.itemconfigure(ids["reading"], text="Detached" if value is None else f"Position {value:+.2f}")
             elif k == "distance":
                 sim_cm = self.sim_distance.get(pins[0], 100)
                 if pins[0] in self.values:          # what the program measured (live on a real Pi)

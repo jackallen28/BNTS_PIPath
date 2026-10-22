@@ -2,7 +2,7 @@
 Type=Application
 Name=Install PiPath
 Comment=Download the latest PiPath from GitHub and install it on this Pi (needs the internet)
-Exec=bash -c "curl -fsSL https://raw.githubusercontent.com/jackallen28/jackallen/BNTS_PiPath/tools/install_pipath.sh -o ~/.pipath_installer.sh || wget -qO ~/.pipath_installer.sh https://raw.githubusercontent.com/jackallen28/jackallen/BNTS_PiPath/tools/install_pipath.sh; bash ~/.pipath_installer.sh; echo; read -r -p 'Press Enter to close this window. ' x"
+Exec=bash -c "curl -fsSL https://raw.githubusercontent.com/jackallen28/BNTS_PIPath/main/tools/install_pipath.sh -o ~/.pipath_installer.sh || wget -qO ~/.pipath_installer.sh https://raw.githubusercontent.com/jackallen28/BNTS_PIPath/main/tools/install_pipath.sh; bash ~/.pipath_installer.sh; echo; read -r -p 'Press Enter to close this window. ' x"
 Icon=system-software-install
 Terminal=true
 Categories=Utility;
