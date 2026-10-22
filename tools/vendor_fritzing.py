@@ -35,7 +35,8 @@ def main():
     ROOT.mkdir(parents=True, exist_ok=True)
     def read(path):
         return subprocess.check_output(['git','-C',str(checkout),'show',f'{COMMIT}:{path}'])
-    (ROOT/'LICENSE.txt').write_bytes(read('LICENSE.txt'))
+    notice = read('LICENSE.txt').decode()
+    (ROOT/'LICENSE.txt').write_text('\n'.join(line.rstrip() for line in notice.splitlines()).rstrip()+'\n')
     manifest = {'repository':'https://github.com/fritzing/fritzing-parts', 'commit':COMMIT,
                 'licence':'CC-BY-SA-3.0', 'sources':SOURCES,
                 'changes':'PNG rasterisation; LED colour variants; resistor bands changed to 330 ohms. '
@@ -47,7 +48,7 @@ def main():
         variants = {f'led_{k}':data.replace('#E60000',v) for k,v in COLOURS.items()} if name == 'led' else {name:data}
         for stem, svg in variants.items():
             source = ROOT / (stem+'.svg')
-            svg = "\n".join(line.rstrip() for line in svg.splitlines()) + "\n"
+            svg = "\n".join(line.rstrip() for line in svg.splitlines()).rstrip() + "\n"
             source.write_text(svg)
             attrs = ET.fromstring(svg).attrib
             view = attrs.get('viewBox', '').split()
