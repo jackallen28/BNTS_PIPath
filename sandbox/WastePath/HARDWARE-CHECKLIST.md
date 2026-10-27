@@ -1,47 +1,34 @@
-# Classroom trial on the actual Pi
+# Trial on the actual Pi and webcam
 
-Record Pi model/OS, webcam model, mounting height, lighting, bin rules and date.
-Start with clean, non-hazardous props and the GPIO simulation mode.
+Record the Pi/OS, webcam, lighting, camera mounting and local bin rules. Use clean,
+safe example items and a small supervised mechanism, starting with simulation.
 
-- Install from a fresh unzip, launch from menu and desktop, and choose the right USB camera.
-- At 1024×640, scroll the right panel and reach every control. Check keyboard Space
-  captures a photo but still types spaces in item names and rules.
-- Clear mat; check preview alignment and take background. Change lighting and camera
-  position deliberately; confirm a new setup and examples are needed.
-- Train at least 2 genuinely different objects per bin, at least 8 views per object;
-  use more kinds for realistic sorting. Vary orientation/position without changing labels.
-- Collect at least 2 different negative scene sets. Include hands from all edges,
-  sleeves, a person leaning into the box and any classroom distractions. Ask consent.
-- Test at least 10 previously untrained physical items per bin. Record correct bin,
-  wrong bin and withheld answers separately; do not count withheld items as correct.
-- Test at least 10 no-item/people scenes: empty mat, people outside the box, hand
-  inside the box, held item, sleeve, face/torso if consented, fast and slow entry,
-  a stationary person and different clothing. Record every unexpected bin choice.
-- Try transparent/pale items, shadows, two items, partial items, unknown items and
-  similar-looking items belonging to different bins. Check withholding messages.
-- Disconnect/reconnect webcam while a bin label is displayed: the label must clear
-  after a second without a fresh frame; UI stays usable and reconnection works.
-- Save, quit, reopen. Verify saved counts and table check; retrain before testing.
-  Undo/delete a set and ensure old model/test results are invalidated.
-- Delete a test session and verify PiPath's student work is untouched.
-- In **GPIO outputs**, check that BCM17 means physical pin 11 and BCM18 means pin
-  12. Confirm duplicate output pins and invalid angles are rejected. Save and reopen
-  the app; the mapping should remain, while real GPIO stays disabled.
-- With power disconnected, wire the LED through its resistor and the servo with
-  an appropriate external supply and common ground. Check the mechanism's clearance
-  and start with small, suitable active/rest angles before fitting a gate.
-- Enable real GPIO only in Live. Present Waste: LED on, servo rest. Present Recycling:
-  LED off, servo active. Confirm other screens and the demo cannot activate hardware.
-- Remove the item; try unknown/people/moving views and disconnect the camera. Check
-  LED off and the rest-angle command while enabled. Test **Stop GPIO**, navigation,
-  settings, reset and application close; these should disarm and release outputs.
-  Verify movement on the actual mechanism: commanding rest does not confirm its position.
-- Confirm a GPIO error leaves hardware disabled and clearly reports the problem.
-  Test the decision-update watchdog with the mechanism unloaded; never assume a
-  software watchdog can move an unpowered servo or handle an operating-system failure.
-- Record responsiveness and memory on the target Pi. Do not infer Pi performance
-  or real-world accuracy from the cloud's synthetic test results.
+- Update application files and run `bash install.sh`. Open the menu launcher and
+  check USB camera selection, the full view and correct proportions of objects.
+- Take a clear-table background; wait for all ten frames to finish. Move the camera
+  deliberately and confirm a new table photo and new training are required.
+- Train ten Waste and ten Recycling photos with names left blank. Change position
+  and orientation between photos. Verify no people/hands training is requested.
+- Train and confirm the app opens Live. Look at the quiz separately if useful.
+- Try fresh items; compare the outlines and recognition with your original ML Camera.
+  Check Computer view and threshold changes on pale objects and shadows.
+- Present known recycling: servo active/open angle, LED off. Present waste: servo
+  rest angle, LED visibly flashing. Present an unfamiliar item: bin remains closed
+  and LED flashes. Remove the item: LED off and servo rest. Inspect the mechanism,
+  not just the on-screen angle, to establish actual movement.
+- Record false classifications and withheld answers using Test; it must not move
+  real GPIO. Improve example photos when the model confuses similar items.
+- Disconnect/reconnect the webcam with a bin label displayed. The stale decision
+  must clear after one second and withdraw GPIO. The interface must remain usable.
+- Change pins/angles, navigate, reset, quit and restart; hardware must be disarmed.
+  Confirm mappings survive restart, but physical GPIO does not automatically enable.
+- Try a GPIO startup error and the update watchdog with the mechanism unloaded.
+  A software stop cannot guarantee servo position after power loss or hardware fault.
+- On first update, check old training is backed up before new full-frame training.
+- Confirm existing PiPath student data is untouched, and record memory/frame rate
+  on the actual Pi. Synthetic cloud tests cannot establish physical accuracy.
 
-If people-only scenes produce bin choices, improve mounting/screens, add local
-negative examples and retest. For unattended deployment, a separately validated
-person/object detector or physical presence control is required.
+Disconnect power before wiring. Use a resistor for the LED and an appropriate
+external servo supply with common ground. Keep fingers clear of the mechanism.
+There is no people detector; use a fixed table-facing setup and remove hands when
+presenting the item. This model is not a machinery safety interlock.

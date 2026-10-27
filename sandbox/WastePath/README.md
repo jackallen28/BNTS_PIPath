@@ -1,219 +1,130 @@
-# WastePath — TEST sandbox
+# WastePath — TEST sandbox, version 0.3.0
 
-> Experimental, standalone test program. It is not integrated into PiPath.
-> Cloud tests use mock GPIO and synthetic cameras; try it on an actual Pi before classroom use.
+A standalone PiPath-style waste/recycling camera workshop, based on your working
+**ML Camera** program. This version restores its recognition method and removes
+the people-training category. It remains separate from the main PiPath app.
 
-A standalone waste-versus-recycling camera workshop for Raspberry Pi, styled to
-fit PiPath: teal desktop, silver bevelled controls, purple-to-teal title bar,
-short student instructions and a guided **Set up → Teach → Train → Test → Live** journey.
-It does not change or depend on the PiPath checkout. Its modules can be integrated later.
+## Install or update
 
-Students teach a small, local machine learning model using **their actual rubbish
-items and their school's bin rules**. It learns appearance, not material composition.
-It cannot identify every recyclable object or decide council rules by itself.
-You can also map each bin category to an LED or a small servo using the GPIO controls.
-
-## Raspberry Pi installation
-
-Use Raspberry Pi OS **Desktop, Bookworm or newer**, a USB webcam and a fixed,
-downward-facing camera mount. Designed to keep the same lightweight approach as
-the supplied ML Camera program; physical Pi performance still needs checking.
-
-1. Unzip this folder somewhere permanent, such as `~/WastePath-app`.
-2. Open a terminal there and run `bash install.sh`. It installs signed distro
-   packages if missing, then adds a menu entry and desktop launcher. It does not
-   start the app or alter PiPath. The folder must stay at that location.
-3. Plug in the webcam and open **WastePath** from the menu. If the desktop asks,
-   mark the launcher executable/trusted. Alternatively:
+On Raspberry Pi OS Desktop, Bookworm or newer, unzip the program somewhere
+permanent, open a terminal inside the WastePath folder, and run:
 
 ```sh
+bash install.sh
 /usr/bin/python3 main.py
-# Another USB device:
-/usr/bin/python3 main.py --camera 1
 ```
 
-Camera reads run in a background thread and reconnect after a read failure.
-Choose a camera number in Setup and press Reconnect if needed. CSI/ribbon cameras
-are not supported by this version's camera adapter; use a USB webcam.
+The installer adds the camera, Tk and GPIO packages and creates a menu/desktop
+launcher. Use a USB webcam. For another camera use `--camera 1`. For a no-camera
+walkthrough use `--demo`; the demo never enables physical GPIO.
 
-For a no-webcam walkthrough:
+**Updating from 0.1/0.2:** replace the application files and run the installer again.
+Then take a new empty-table photo and retrain once. Older training used a central
+crop and is incompatible with the restored full-frame measurements. The app keeps
+a `training-backup-*.npz` copy before replacing old-format training. Your GPIO pins
+and angles are kept in the separate `outputs.json` file.
 
-```sh
-/usr/bin/python3 main.py --demo
-```
+## Teach it, then sort
 
-The demo uses deliberately simple coloured shapes. It is labelled on screen,
-stores its own examples separately and is **not evidence of rubbish accuracy**.
-GPIO actions can be previewed in simulation; the demo cannot enable real GPIO.
+1. **Set up:** aim at a plain table with steady lighting. Clear the table, including
+   your hands, then press **Photograph empty table**. It averages ten camera frames,
+   just like the original. Keep the camera in that position.
+2. **Teach Waste:** take **10 photos**. Move or turn the item between photos and
+   take your hand away. Names are optional. You can include different waste items
+   if they belong in your local waste bin.
+3. **Teach Recycling:** the category advances automatically after the first ten
+   photos. Take **10 recycling photos** in the same way. There is no humans, hands
+   or background training class. More varied item photos can be added later.
+4. **Train:** press **Train and quiz**. It uses the original colour/shape scaling,
+   five-nearest-neighbour votes, photo quiz and unknown-object distance limit.
+   Training takes you straight to **Live**, ready to sort.
+5. **Live:** simulation shows what the outputs would do. On the Pi, configure the
+   pins in **GPIO outputs**, then press **Enable real GPIO** once for this session.
 
-For an existing installation, replace the application files with this version and
-rerun `bash install.sh` to add the GPIO dependencies. Your default `~/WastePath`
-training folder is separate from the application folder; keep it when updating.
+The default behaviour is:
 
-## The student workshop
+| Camera result | Servo / bin | LED |
+| --- | --- | --- |
+| Recognised Recycling | Open, at configured active angle | Off |
+| Recognised Waste | Rest / closed angle | Flashes |
+| Unrecognised or uncertain item | Rest / closed angle | Flashes |
+| Empty table | Rest / closed angle | Off |
+| Camera disconnected or stale | Rest-angle command | Off |
 
-1. **Set up the station.** Aim down at a plain mat. The marked central box is the
-   inspection area; everything outside it is excluded from measurements. Agree on
-   local bin rules with the teacher and enter a short reminder. Use clean props,
-   not sharp, dirty or hazardous waste. Clear the mat and photograph it.
-2. **Collect Waste examples.** Select Waste. Name a real item, such as `wrapper A`.
-   Take at least **8 photos**, moving and turning it between photos. Keep hands out.
-   Repeat with a genuinely different item, such as `tissue B` if local rules agree.
-3. **Collect Recycling examples.** Repeat with at least **2 different items**,
-   8 photos each. Include similar colours across both bins so the computer cannot
-   simply learn “blue means recycling”. Add more item types when results are weak.
-4. **Teach what to ignore.** Select **People / hands / other**. Make at least
-   **2 scene sets**, 8 photos each: for example a hand entering from the left and
-   a sleeve/torso entering from the right. Include varied hands, clothing and
-   positions, with permission. Names describe scenes, never people. A completely
-   empty mat needs no negative photo: it is handled by the background check.
-5. **Train and quiz.** Training requires all six sets (at least 48 examples).
-   The quiz withholds a whole named item/scene each time. It reports correct bin
-   choices, withheld answers and wrong bin choices separately. Poor results are
-   useful clues: return to Teach, undo/delete a bad set or add better examples.
-6. **Test fresh examples.** Use different physical items, not the training items.
-   Wait for a steady answer and record what the item actually is with the three
-   category buttons. Repeat with people, hands, unknown objects and an empty mat.
-   Test records are independent: they never train the model. A withheld item is
-   counted as withheld, not as a correct bin classification. For people/no-item
-   trials, withholding is the desired behaviour.
-7. **Try Live.** Show one whole item in the box, move hands away and wait about a
-   second. A steady accepted answer is shown as WASTE or RECYCLING. Otherwise the
-   app explains why it is withholding a choice. Check any real disposal decision
-   against the local rules. Live uses the same pipeline as Test.
+A new accepted label must remain consistent for half a second before operating
+its output. Recognition is smoothed across frames as in ML Camera; the removed
+motion, edge, large-area and central-crop gates no longer keep blocking items.
+The LED flashes twice per second and does not restart its flash timer each frame.
 
-There is no automatic progression or claim of “ready” based on a perfect quiz.
-Test until behaviour is acceptable for the activity. In particular, record **zero
-bin choices on people-only trials** before demonstrating it; if this fails, improve
-the station and data. Passing these trials still does not guarantee detection.
+“Wrong” means waste presented to the default recycling bin, or something the model
+does not recognise. The program cannot know by itself that a confident prediction
+is factually wrong. Use the optional **Test** screen and record the actual category
+to measure those mistakes. Test results never become training photos or move hardware.
 
-## People in the camera path
+If the outline misses pale objects, reduce the **Background threshold** in Setup.
+If it picks up shadows, increase it. The default is 22, as in your original app.
+Use **Computer view** to see the changed pixels. The whole 4:3 camera image is used;
+widescreen input is cropped to 4:3 before resizing, so shapes are not stretched.
 
-A generic downloaded bank of people is not enough: it may have different framing,
-lighting and clothing from the classroom. This app instead combines:
+## GPIO settings and wiring
 
-- A fixed inspection box. People outside it do not become classifier inputs.
-- Local negative scene examples: hands, sleeves, people and other distractions.
-- Scene checks that withhold a bin if objects touch the box edge, cover too much
-  of it, or appear as multiple separate objects.
-- Motion checks and a one-second steady-label requirement.
-- Similarity and novelty rejection: weak or unfamiliar matches get no bin choice.
-- Immediate withdrawal of a result if the webcam stops delivering fresh frames.
+Choose Off, LED or Servo separately for Waste and Recycling. Each enabled output
+needs a different **BCM GPIO number**, not a physical header pin number. Servo
+active/rest angles can be set from 0° to 180°. To make a waste bin instead, assign
+the servo to Waste and LED to Recycling. Unrecognised items activate whichever LED
+outputs are configured; they never activate a servo. Keep an LED configured if you
+want the wrong-item indicator.
 
-**This is not a person detector.** A stationary hand or person wholly inside the
-box can still resemble a trained item; an item held by a person can also fool it.
-The strongest practical protection is a downward-facing, enclosed or screened
-inspection station where faces and bodies cannot enter the item area. The GPIO
-feature is for a supervised classroom LED or lightweight servo prototype. This
-classifier is not a safety interlock for people or industrial machinery.
+Default wiring, with power disconnected:
 
-There is no face identification, online image bank, upload or cloud API. Captured
-training pictures are processed in memory and discarded; only colour/shape
-measurements, labels and scene/item names are saved. The **empty mat background**
-is retained for segmentation, so make sure it is empty when calibrating.
-Measurements and names should still be treated as classroom data.
+- LED: BCM17 (**physical pin 11**) → LED anode; cathode → **220–330 Ω resistor** →
+  Pi GND (for example physical pin 6).
+- Servo signal: BCM18 (**physical pin 12**). Power it from a suitable external
+  regulated supply, normally 5 V, according to its specification. Join the servo
+  ground, supply ground and Pi ground. Do not power a motor from a GPIO signal pin.
+- Set active/rest angles to match your mechanism before attaching a lid or gate.
+  The driver uses 1–2 ms pulses. Actual travel depends on the servo.
 
-## Custom GPIO outputs
+The app starts with GPIO disabled. **Stop GPIO**, changing screens/settings,
+changing training, reset and exit release hardware. An independent watchdog stops
+outputs if decision updates stop for 1.5 seconds; GPIO errors also stop outputs
+until you explicitly enable them again. A rest command is not position feedback
+and cannot guarantee that an unpowered or faulty servo closed the bin.
 
-Open **GPIO outputs** to choose **Off**, **LED** or **Servo** independently for
-Waste and Recycling. Choose a distinct **BCM GPIO number** for each enabled output;
-these are not the physical header pin numbers. Supported BCM numbers are 2–27.
-For a servo, set the detected-item angle and rest angle between 0° and 180°.
+Use a supervised lightweight classroom mechanism and keep fingers clear. This is
+not a person detector or a safety interlock. See [HARDWARE-CHECKLIST.md](HARDWARE-CHECKLIST.md).
 
-The starting example matches a simple sorting demonstration:
+## Saved data and later PiPath integration
 
-| Detected category | Output | BCM GPIO | Physical header pin | Action |
-| --- | --- | --- | --- | --- |
-| Waste | LED | 17 | 11 | LED on while Waste is accepted |
-| Recycling | Servo | 18 | 12 | 90° while Recycling is accepted; 0° at rest |
+Normal data is in `~/WastePath`; demo data is in `~/WastePath/demo`. Use
+`--data-dir /some/folder` or `WASTEPATH_HOME` to choose a different location.
 
-The other output returns to neutral when a category is accepted: Waste turns the
-LED on and requests the servo's rest angle; Recycling turns the LED off and requests
-the servo's active angle. Choose angles that match your particular gate mechanism.
-The servo driver uses a conservative 1–2 ms pulse range; actual travel varies by servo.
+- `training.npz`: version 2 full-frame measurements and the empty-table background;
+  saved atomically after capture/undo/deleting examples. Camera photos are not saved.
+- `outputs.json`: GPIO mapping and angles; the enabled state is never saved.
+- `project.json`: local bin-rules note and segmentation threshold.
+- `fresh-tests.json`: the latest optional fresh test results.
 
-1. Start in simulation, set the mapping and save it. Use Live to check the intended
-   actions displayed on screen without connecting anything.
-2. Disconnect power before wiring. For the default LED, connect BCM17 (physical
-   pin 11) to its anode, and its cathode through a **220–330 Ω resistor** to GND
-   (physical pin 6). For the servo, connect its signal to BCM18 (physical pin 12).
-   Power the servo from a suitable regulated **5 V external supply**, not a GPIO
-   output. Join the supply ground, servo ground and Pi ground. Check your servo's
-   voltage/current requirements and keep fingers clear of its travel.
-3. Complete setup, training and fresh tests, then open **Live** with a fresh camera
-   view. Press **Enable real GPIO** to connect the outputs for this session. On
-   Raspberry Pi OS, the installer includes `python3-gpiozero` and `python3-lgpio`.
-4. Present an item and move your hands away. Only an accepted, steady **Live**
-   result drives real outputs. Setup, Teach, Train and Test do not drive them.
-   **Stop GPIO** releases the hardware whenever you need to stop.
+Reopening saved version 2 training needs the empty-table check and retraining.
+A new background capture clears current examples after confirmation. **New session**
+clears training/test data, preserving hardware mappings and any migration backups.
 
-No item, motion, an unknown view, a person/hand rejection or a missing camera
-withdraws the bin choice: the LED turns off and the servo is commanded to its rest
-angle while GPIO is enabled. Moving to another screen, opening settings, resetting
-or changing the training/configuration, and closing the app disarm and release the
-outputs. An independent watchdog also disarms if fresh decision updates stop for
-more than 1.5 seconds. A GPIO fault disarms and reports the error; it does not
-silently re-enable hardware.
+`vision.py` and `model.py` contain the original-style recognition, `camera.py` reads
+the newest frame off the Tk thread, `outputs.py` handles GPIO, and `app.py` provides
+the PiPath-style interface. See [INTEGRATION.md](INTEGRATION.md) for the later merge.
 
-The app always starts in simulation. Saved mappings never save the enabled state.
-A rest-angle command is not position feedback: once a servo is released, during
-power loss or after a fault, the app cannot confirm that it reached or holds rest.
-Real GPIO operation and servo movement still require a trial on the actual Pi.
+## Development checks
 
-## Saved sessions
-
-Normal data goes in `~/WastePath`; demo data in `~/WastePath/demo`.
-Use `--data-dir /some/folder` or `WASTEPATH_HOME` to change it.
-
-- `training.npz`: versioned feature measurements and the empty-mat background.
-  Saved after each capture, undo and set deletion with an atomic file replacement.
-- `project.json`: the local bin-rules reminder.
-- `fresh-tests.json`: the most recently recorded fresh-test results.
-- `outputs.json`: the GPIO mapping and servo angles; enabling real hardware is never saved.
-
-Saved training needs an **empty-table check and retraining** after reopening.
-If the camera, light or mat changed, photograph a new empty mat and collect new
-examples. Recapturing the background clears previous training after confirmation.
-**New session** asks before deleting this app's saved data. It never touches PiPath.
-
-## How the model works
-
-Adapted from your supplied ML Camera: background subtraction in Lab colour space,
-then 29 colour/shape features and distance-weighted 5-nearest-neighbour voting.
-Features are scaled from the training set. Each class has a novelty limit derived
-from its nearest same-class examples; bin choices also need at least 80% of the
-neighbour vote and a clear margin. Those votes are **not calibrated probabilities**.
-The whole-item quiz refits its model without the held-out item, including scaling
-and novelty limits. Training is capped at 480 examples to bound memory on small Pis.
-
-It is intentionally an inspectable teaching model, not a pretrained semantic
-waste recogniser. Transparent bottles, shadows, dirty packaging, very similar
-objects and unfamiliar materials can defeat it. A future PiPath integration could
-add a small transfer-learning image encoder behind the same model interface, with
-separate Raspberry Pi performance and accuracy validation.
-
-## Development and testing
-
-On desktop Linux (Python 3.11+ with Tk installed):
+On desktop Linux with Python 3.11+ and Tk:
 
 ```sh
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 .venv/bin/python main.py --demo
+# Use a desktop display, or prefix this command with xvfb-run -a:
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-GUI tests require a display. With Xvfb available:
-
-```sh
-xvfb-run -a .venv/bin/python -m unittest discover -s tests -v
-```
-
-Tests exercise known/unknown/ambiguous classifications, negative examples, grouped
-validation, stability reset, camera loss, safe local persistence and the full real
-Tk teach/train/test/live workflow using a synthetic camera. They do not validate
-USB hardware, Raspberry Pi frame rate, physical GPIO/servo behaviour or real-world
-people rejection. GPIO tests use simulated devices rather than real header pins.
-
-See [HARDWARE-CHECKLIST.md](HARDWARE-CHECKLIST.md) before a classroom trial and
-[INTEGRATION.md](INTEGRATION.md) for the later PiPath merge.
+Tests include reference results generated from the uploaded original camera
+program, GUI training-to-sorting, and simulated GPIO blinking/servo behaviour.
+They do not establish real rubbish accuracy, USB compatibility or Pi performance.

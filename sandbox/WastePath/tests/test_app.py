@@ -39,30 +39,32 @@ class WorkshopTests(unittest.TestCase):
         self.app.close(); self.patcher.stop(); self.tmp.cleanup()
     def view(self,kind,variation=0):
         self.app.cam.frame=demo_frame(kind,variation)
-        self.app.tick(); self.app.tick()
+        for _ in range(8): self.app.tick()
         self.app.update_idletasks()
     def train_workshop(self):
         a=self.app
         self.view("Empty table")
         a.calibrate()
+        self.assertFalse(a.calibrated)
+        for _ in range(10): a.tick()
         self.assertTrue(a.calibrated)
         a.show_step(1)
         for label,kind in enumerate(LABELS):
             a.label_var.set(kind)
-            for group in range(2):
-                a.group_var.set(f"{kind} {group}")
-                for photo in range(8):
-                    self.view(kind,photo+group)
-                    a.last_capture=0
-                    a.capture()
-        self.assertEqual(len(a.samples),48)
+            a.group_var.set("")
+            for photo in range(10):
+                self.view(kind,photo)
+                a.last_capture=0
+                a.capture()
+        self.assertEqual(len(a.samples),20)
         a.show_step(2); a.train()
         deadline=time.monotonic()+10
         while a.busy and time.monotonic()<deadline:
             a.tick(); time.sleep(.01)
         self.assertFalse(a.busy)
         self.assertIsNotNone(a.model)
-        self.assertEqual(len(a.quiz),6)
+        self.assertEqual(len(a.quiz),2)
+        self.assertEqual(a.step,4)
         a.show_step(3); a.gate.seconds=0
     def test_teach_train_test_live_and_camera_loss(self):
         a=self.app
@@ -74,7 +76,7 @@ class WorkshopTests(unittest.TestCase):
         self.assertEqual(len(a.test_records),1)
         self.assertEqual(len(a.samples),before)
         self.assertEqual(a.test_records[0]['predicted'],0)
-        self.view("People / hands / other")
+        self.view("Unknown item")
         self.assertIsNone(a.prediction.label)
         a.last_capture=0; a.record_test(2)
         self.assertIsNone(a.test_records[-1]['predicted'])
@@ -107,17 +109,55 @@ class WorkshopTests(unittest.TestCase):
         other=App(self.tmp.name,demo=True)
         try:
             self.assertFalse(other.calibrated)
-            self.assertEqual(len(other.samples),47)
+            self.assertEqual(len(other.samples),19)
             self.assertIsNone(other.model)
         finally: other.close()
-    def test_invalid_names_and_missing_examples_do_not_train(self):
+    def test_optional_item_names_and_missing_examples_do_not_train(self):
         a=self.app
-        self.view("Empty table"); a.calibrate(); a.show_step(1)
+        self.view("Empty table"); a.calibrate()
+        for _ in range(10): a.tick()
+        a.show_step(1)
         self.view("Waste"); a.group_var.set(""); a.capture()
-        self.assertEqual(a.samples,[])
+        self.assertEqual(len(a.samples),1)
         a.train()
         self.assertFalse(a.busy)
         self.assertIsNone(a.model)
+
+    def test_background_averages_ten_unique_frames_and_aborts_on_disconnect(self):
+        import numpy as np
+        from wastepath.vision import shrink,to_lab
+        a=self.app
+        self.view("Empty table"); a.calibrate()
+        frames=[]
+        for i in range(9):
+            a.cam.frame=np.full((480,640,3),70+i,np.uint8)
+            frames.append(to_lab(shrink(a.cam.frame)))
+            a.tick()
+            self.assertFalse(a.calibrated)
+        a.cam.frame=np.full((480,640,3),79,np.uint8)
+        frames.append(to_lab(shrink(a.cam.frame))); a.tick()
+        self.assertTrue(a.calibrated)
+        np.testing.assert_allclose(a.background,np.mean(frames,axis=0))
+        a.calibrate(); a.cam.offline=True; a.tick()
+        self.assertFalse(a.calibrated)
+        self.assertIsNone(a.bg_frames)
+
+    def test_old_training_is_preserved_before_full_frame_retraining(self):
+        import numpy as np
+        a=self.app
+        np.savez(a.file,version=[1],features=np.zeros((1,29)),labels=[0],groups=['old'],background=np.zeros((240,320,3)))
+        original=a.file.read_bytes()
+        a.load_error="Old cropped training"
+        self.view("Empty table")
+        with patch('wastepath.app.messagebox.askyesno',return_value=True):
+            a.calibrate()
+        backups=list(Path(self.tmp.name).glob('training-backup-*.npz'))
+        self.assertEqual(len(backups),1)
+        self.assertEqual(backups[0].read_bytes(),original)
+        for _ in range(10): a.tick()
+        self.assertTrue(a.calibrated)
+        from wastepath.storage import load
+        self.assertEqual(load(a.file)[0],[])
 
     def test_gpio_settings_validate_persist_and_never_arm_demo(self):
         a=self.app
@@ -185,15 +225,15 @@ class WorkshopTests(unittest.TestCase):
         self.assertEqual(pin_factory.pin(17).state,0)
         a.gate.seconds=0
         self.view("Waste")
-        self.assertEqual(pin_factory.pin(17).state,1)
+        self.assertIsNotNone(a.outputs._devices[0]._blink_thread)
         self.view("Recycling")
         self.assertEqual(pin_factory.pin(17).state,0)
         self.assertAlmostEqual(pin_factory.pin(18).state,.075)
-        self.view("People / hands / other")
-        self.assertEqual(pin_factory.pin(17).state,0)
+        self.view("Unknown item")
+        self.assertIsNotNone(a.outputs._devices[0]._blink_thread)
         self.assertAlmostEqual(pin_factory.pin(18).state,.05)
         self.view("Waste")
-        self.assertEqual(pin_factory.pin(17).state,1)
+        self.assertIsNotNone(a.outputs._devices[0]._blink_thread)
         a.show_outputs()
         self.assertFalse(a.outputs.armed)
         self.assertEqual(pin_factory.pin(17).state,0)

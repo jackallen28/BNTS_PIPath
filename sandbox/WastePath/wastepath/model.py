@@ -1,17 +1,19 @@
-"""Small, inspectable kNN classifier. Votes are similarity, not probability."""
+"""The supplied ML Camera's colour/shape scaling, weighted kNN and novelty check."""
 from dataclasses import dataclass
+import math
 import time
 import numpy as np
+from .vision import N_COLOUR, N_SHAPE
 
-LABELS = ("Waste", "Recycling", "People / hands / other")
-MIN_PHOTOS = 8
-MIN_GROUPS = 2
+LABELS=("Waste", "Recycling")
+MIN_PHOTOS=10
+K_NEIGHBOURS=5
 
 @dataclass
 class Sample:
     feature: np.ndarray
     label: int
-    group: str
+    group: str = ""
 
 @dataclass
 class Prediction:
@@ -21,74 +23,96 @@ class Prediction:
 
 
 def requirements(samples):
-    missing = []
-    for label, name in enumerate(LABELS):
-        groups = {s.group for s in samples if s.label == label}
-        complete = sum(sum(s.label == label and s.group == g for s in samples) >= MIN_PHOTOS for g in groups)
-        if complete < MIN_GROUPS:
-            missing.append(f"{name}: {complete}/{MIN_GROUPS} sets with {MIN_PHOTOS}+ photos")
+    missing=[]
+    for label,name in enumerate(LABELS):
+        count=sum(s.label==label for s in samples)
+        if count<MIN_PHOTOS: missing.append(f"{name}: {count}/{MIN_PHOTOS} photos")
     return missing
 
 
 class Model:
     def __init__(self, samples):
-        if len(samples) < 2:
-            raise ValueError("More examples are needed")
-        self.x = np.asarray([s.feature for s in samples], dtype=np.float32)
-        self.y = np.asarray([s.label for s in samples], dtype=np.int32)
-        if self.x.ndim != 2 or self.x.shape[1] != 29 or not np.isfinite(self.x).all():
+        features=[s.feature for s in samples]
+        labels=[s.label for s in samples]
+        if len(samples)<2:
+            raise ValueError("Take more example photos first")
+        if any(type(label) is not int or label not in (0,1) for label in labels):
+            raise ValueError("Train only Waste and Recycling examples")
+        self.probs=None
+        self.X = np.asarray(features, np.float32)
+        self.y = np.asarray(labels, int)
+        if self.X.shape != (len(labels),29) or not np.isfinite(self.X).all():
             raise ValueError("Invalid training measurements")
-        self.mean = self.x.mean(axis=0)
-        self.scale = np.maximum(self.x.std(axis=0), .08)
-        self.z = (self.x-self.mean)/self.scale / np.sqrt(29)
-        # Each class gets its own novelty limit, using nearest same-class examples.
-        self.limits = {}
-        for label in range(3):
-            points = self.z[self.y == label]
-            if len(points) < 2:
-                self.limits[label] = 0
-                continue
-            distances = np.sqrt(((points[:, None]-points[None, :])**2).sum(axis=2))
-            np.fill_diagonal(distances, np.inf)
-            self.limits[label] = max(.25, min(2., float(np.quantile(distances.min(axis=1), .95))*2.5))
+        self.k = max(1, min(K_NEIGHBOURS, len(self.y) - 1))
+        # Learn how much the numbers normally vary, so colour and shape count
+        # equally and no single number is allowed to shout over the others.
+        self.mean = self.X.mean(axis=0)
+        self.scale = np.ones(self.X.shape[1], np.float32)
+        colour_spread = math.sqrt(float(self.X[:, :N_COLOUR].var(axis=0).sum()))
+        self.scale[:N_COLOUR] = max(colour_spread, 0.05)
+        shape_std = np.maximum(self.X[:, N_COLOUR:].std(axis=0), 0.05)
+        self.scale[N_COLOUR:] = shape_std * math.sqrt(N_SHAPE)
+        self.Z = (self.X - self.mean) / self.scale
+
+        # Quiz: hide each photo in turn and guess it from all the others.
+        self.quiz = []
+        nearest = []
+        for i in range(len(self.y)):
+            probs, _, dist = self._vote(self._distances(self.Z[i]), skip=i)
+            self.quiz.append(int(np.argmax(probs)))
+            nearest.append(dist)
+        # Anything much further away than usual is something new.
+        self.unknown_dist = max(3.0 * float(np.percentile(nearest, 90)), 1.5)
+
+    def _distances(self, z):
+        return np.sqrt(((self.Z - z) ** 2).sum(axis=1))
+
+    def _vote(self, dists, skip=None):
+        order = np.argsort(dists)
+        if skip is not None:
+            order = order[order != skip]
+        votes = np.zeros(len(LABELS))
+        for i in order[:self.k]:
+            votes[self.y[i]] += 1.0 / (dists[i] + 0.1)  # closer photos get a bigger vote
+        return votes / votes.sum(), int(order[0]), float(dists[order[0]])
+
+    def vote(self, feature):
+        """Returns similarity votes, nearest photo index and feature distance."""
+        z = (feature - self.mean) / self.scale
+        return self._vote(self._distances(z))
+
+
+    def reset_prediction(self):
+        self.probs=None
 
     def predict(self, feature):
         if feature is None:
-            return Prediction(None, 0, "No item to classify")
-        z = (np.asarray(feature)-self.mean)/self.scale/np.sqrt(29)
-        d = np.sqrt(((self.z-z)**2).sum(axis=1))
-        order = np.argsort(d)[:min(5, len(d))]
-        votes = np.bincount(self.y[order], weights=1/(d[order]+.03), minlength=3)
-        votes /= votes.sum()
-        best = int(votes.argmax())
-        support = float(votes[best])
-        if best == 2:
-            return Prediction(None, support, "Looks like a person, hand or other example: no bin choice")
-        if d[order[0]] > self.limits[best]:
-            return Prediction(None, support, "This looks new. Add varied examples or check the local rules")
-        ranked = np.sort(votes)
-        if support < .8 or ranked[-1]-ranked[-2] < .35:
-            return Prediction(None, support, "The examples disagree: I am not sure")
-        return Prediction(best, support, "")
+            self.reset_prediction()
+            return Prediction(None,0,"Show an item on the table")
+        probs, nearest, distance=self.vote(feature)
+        self.probs=probs if self.probs is None else .5*self.probs+.5*probs
+        best=int(np.argmax(self.probs))
+        support=float(self.probs[best])
+        if distance>self.unknown_dist:
+            return Prediction(None,support,"I don't know this item: bin stays closed")
+        if support<.55:
+            return Prediction(None,support,"Not sure yet: bin stays closed")
+        return Prediction(best,support,"")
 
     @staticmethod
-    def group_quiz(samples):
-        # Leave a whole named item/scene out, not just a nearly identical photo.
-        rows = []
-        for label, group in sorted({(s.label, s.group) for s in samples}):
-            train = [s for s in samples if (s.label, s.group) != (label, group)]
-            test = [s for s in samples if (s.label, s.group) == (label, group)]
-            model = Model(train)
-            guesses = [model.predict(s.feature).label for s in test]
-            rows.append({"label":label,"group":group,"total":len(test),
-                         "correct":sum(g == label for g in guesses) if label != 2 else 0,
-                         "withheld":sum(g is None for g in guesses),
-                         "wrong_bin":sum(g is not None and g != label for g in guesses)})
+    def training_quiz(samples):
+        # Same leave-one-photo-out teaching quiz as the original camera app.
+        model=Model(samples)
+        rows=[]
+        for label,name in enumerate(LABELS):
+            indices=[i for i,s in enumerate(samples) if s.label==label]
+            right=sum(model.quiz[i]==label for i in indices)
+            rows.append({"label":label,"group":name,"total":len(indices),
+                         "correct":right,"withheld":0,"wrong_bin":len(indices)-right})
         return rows
 
-
 class SteadyGate:
-    def __init__(self, seconds=1.0):
+    def __init__(self, seconds=.5):
         self.seconds = seconds
         self.reset()
 
@@ -98,9 +122,9 @@ class SteadyGate:
 
     def apply(self, prediction, reason="", moving=False, now=None):
         now = time.monotonic() if now is None else now
-        if reason or moving or prediction.label is None:
+        if reason or prediction.label is None:
             self.reset()
-            return Prediction(None, prediction.similarity, reason or ("Hold still and move hands away" if moving else prediction.reason))
+            return Prediction(None, prediction.similarity, reason or prediction.reason)
         if self.label != prediction.label:
             self.label, self.since = prediction.label, now
         if now-self.since < self.seconds:

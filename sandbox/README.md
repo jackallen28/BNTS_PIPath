@@ -1,18 +1,22 @@
 # Test programs sandbox
 
-This branch contains **WastePath**, a standalone waste-versus-recycling machine
-learning camera workshop with configurable LED and servo GPIO outputs.
+**WastePath 0.3.0** is a standalone waste/recycling camera workshop for evaluation
+before a later PiPath integration. The main PiPath application is unchanged and
+nothing in this folder starts automatically.
 
-It is a test program for evaluation before a later PiPath integration. Existing
-PiPath application files are unchanged. No sandbox program is launched automatically.
+This version restores the user's original ML Camera recognition method. Teach ten
+Waste and ten Recycling photos; no people training is needed. After training,
+Live opens the servo bin for recognised recycling and flashes an LED for waste or
+unrecognised items. Custom GPIO pins and angles are supported.
 
-- Open [WastePath/README.md](WastePath/README.md) for installation and the student workflow.
-- Download [WastePath-GPIO-RaspberryPi.zip](WastePath-GPIO-RaspberryPi.zip) for just the test program.
-- Or download this branch as a ZIP and open the `sandbox/WastePath` folder.
-- On Raspberry Pi OS Desktop, run `bash install.sh` inside the WastePath folder.
-- Camera-free demo: `/usr/bin/python3 main.py --demo` after installation.
-- Real GPIO starts disabled; enable it explicitly in Live after configuring outputs.
+- Read [WastePath/README.md](WastePath/README.md) for the workflow and wiring.
+- Download [WastePath-GPIO-RaspberryPi-v0.3.0.zip](WastePath-GPIO-RaspberryPi-v0.3.0.zip)
+  for the updated test program, or download this branch and open `sandbox/WastePath`.
+- Run `bash install.sh` inside the WastePath folder on Raspberry Pi OS Desktop.
+- For a camera-free walkthrough run `/usr/bin/python3 main.py --demo`.
+- Enable real GPIO explicitly in Live after setup and training.
 
-Training data is stored separately in `~/WastePath` by default. Do not replace that
-student-data folder when updating application files. Physical camera, GPIO, servo
-travel and real-world sorting accuracy still require validation on the target Pi.
+When upgrading from 0.1/0.2, take a new background photo and retrain once: earlier
+cropped training is backed up before replacement. GPIO mappings are preserved.
+Normal data is stored separately in `~/WastePath`; keep it when replacing the app.
+Physical camera, GPIO, servo travel and accuracy still need checking on the target Pi.

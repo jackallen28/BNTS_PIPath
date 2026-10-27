@@ -23,7 +23,7 @@ class OutputDialog(tk.Toplevel):
         self.message = tk.StringVar(value="Simulation until you enable real GPIO in Live. Opening this window stops GPIO.")
         tk.Label(self,text="What should each detected category do?",bg="#704988",fg="white",
                  font=(app.ui_font,15,"bold"),padx=12,pady=12).pack(fill="x")
-        tk.Label(self,text="Each category can use an LED or servo. Set unused categories to Off.\n"
+        tk.Label(self,text="Use a servo for the bin category and a flashing LED for wrong items. Set unused categories to Off.\n"
                  "Use BCM GPIO numbers; wire the corresponding physical header pin shown below.",
                  bg="#C0C0C0",justify="left",anchor="w",padx=14,pady=10).pack(fill="x")
         rules={rule.label:rule for rule in app.outputs.config.rules}
@@ -58,9 +58,9 @@ class OutputDialog(tk.Toplevel):
             variables["pin"].trace_add("write",refresh)
             refresh()
             self.rows.append(variables)
-        tk.Label(self,text="An LED turns off, and a servo receives its rest-angle command, for any other\n"
-                 "category or withheld answer. Real outputs run only in Live; Test does not drive outputs.\n"
-                 "Servo power: use a suitable external supply and share its ground with the Pi.\n"
+        tk.Label(self,text="An LED flashes for its category AND unrecognised items. A servo opens only\n"
+                 "for its recognised category. Empty table: LED off and servo at rest.\n"
+                 "Real outputs run only in Live. Servo power: use a suitable external supply and share its ground with the Pi.\n"
                  "Use a resistor with the LED. Disconnect power before changing wires.",
                  bg="#FFFFE1",justify="left",anchor="w",padx=10,pady=8).pack(fill="x",padx=14,pady=10)
         tk.Label(self,textvariable=self.message,bg="#C0C0C0",fg="#704988",wraplength=750,justify="left").pack(fill="x",padx=14)

@@ -13,13 +13,18 @@ def demo_frame(kind="Empty table", variation=0):
         cv2.fillPoly(frame,[pts],(170,80,35))
     elif kind == "Recycling":
         cv2.ellipse(frame,(320+x,240),(45,68),int(variation%5)*4,0,360,(30,150,220),-1)
-    elif kind == "People / hands / other":
-        cv2.rectangle(frame,(125,200),(340+x,270),(100,160,210),-1)
     elif kind == "Unknown item":
         cv2.circle(frame,(320,240),65,(160,40,150),-1)
-    elif kind == "Person outside area":
-        cv2.rectangle(frame,(0,0),(95,479),(100,160,210),-1)
     return frame
+
+
+def normalise_frame(frame):
+    # Preserve shapes: the original crops widescreen webcams to 4:3 before resize.
+    h,w=frame.shape[:2]
+    if w*3>h*4+8:
+        cut=(w-h*4//3)//2
+        frame=frame[:,cut:w-cut]
+    return cv2.resize(frame,(640,480),interpolation=cv2.INTER_AREA)
 
 
 class Camera:
@@ -57,7 +62,7 @@ class Camera:
                             self.error = "Camera unavailable. Reconnect it, or choose another camera number."
                         self.stop_event.wait(2)
                         continue
-                    frame = cv2.resize(frame,(640,480))
+                    frame = normalise_frame(frame)
                 seq += 1
                 with self.lock:
                     self.latest = (seq,time.monotonic(),frame)

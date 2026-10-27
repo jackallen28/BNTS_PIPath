@@ -1,5 +1,5 @@
 """Colour/shape extraction adapted from the user-supplied ML Camera app.
-Only the marked inspection area is analysed. No identity recognition is used.
+The whole camera image is analysed, as in the original program.
 """
 import math
 from dataclasses import dataclass
@@ -112,28 +112,15 @@ class Observation:
 
 
 def inspect(frame, background, previous=None, threshold=22):
-    small = shrink(frame)
-    moving = previous is None or float(np.mean(cv2.absdiff(small, previous))) > 2.5
-    mask = difference_mask(small, background, threshold)
-    contours = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[-2]
-    contours = [c for c in contours if cv2.contourArea(c) >= .01 * PROC_W * PROC_H]
-    if not contours:
-        return Observation(None, None, "Show one item in the inspection area", moving), small
-    contour = max(contours, key=cv2.contourArea)
-    feature = measure(small, contour)
-    x, y, w, h = cv2.boundingRect(contour)
-    area = cv2.contourArea(contour) / (PROC_W * PROC_H)
-    reason = ""
-    if len(contours) > 1:
-        reason = "Show one item at a time; move hands away"
-    elif area > .60:
-        reason = "Too much of the area is covered; move hands or people away"
-    elif x <= 3 or y <= 3 or x+w >= PROC_W-3 or y+h >= PROC_H-3:
-        reason = "Keep the whole item inside the inspection area"
-    return Observation(feature, contour, reason, moving), small
+    """Use the original full-frame largest changed object, without extra rejection gates."""
+    small=shrink(frame)
+    mask=difference_mask(small,background,threshold)
+    contour=biggest_object(mask)
+    if contour is None:
+        return Observation(None,None,"Show an item on the table",False),small
+    return Observation(measure(small,contour),contour,"",False),small
 
 
 def inspection_crop(frame):
-    # Centre 60% of a 4:3 camera image: the border is context, never training data.
-    h, w = frame.shape[:2]
-    return frame[int(h*.2):int(h*.8), int(w*.2):int(w*.8)]
+    # Kept as a compatibility helper: the complete image is now used.
+    return frame

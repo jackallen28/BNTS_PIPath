@@ -29,6 +29,11 @@ class FakeDevice:
         self.value = 1
         self.events.append("on")
 
+    def blink(self,**kwargs):
+        if self.fail_on: raise OSError("lost GPIO")
+        self.value=1
+        self.events.append("blink")
+
     def off(self):
         self.value = 0
         self.events.append("off")
@@ -125,7 +130,7 @@ class ControllerTests(unittest.TestCase):
         c = self.controller
         self.assertFalse(c.armed)
         c.update(0)
-        self.assertIn("Waste: LED BCM17 ON", c.state_text)
+        self.assertIn("Waste: LED BCM17 FLASHING", c.state_text)
         self.assertIn("servo BCM18 0°", c.state_text)
         c.update(1)
         self.assertIn("LED BCM17 off", c.state_text)
@@ -174,6 +179,27 @@ class ControllerTests(unittest.TestCase):
         c.update(1)
         self.assertEqual(self.factory.devices[22].angle, 20)
         self.assertEqual(self.factory.devices[23].value, 1)
+
+    def test_actual_gpiozero_mock_led_toggles_and_stops_flashing(self):
+        from gpiozero import LED
+        from gpiozero.pins.mock import MockFactory
+        pins=MockFactory()
+        c=Controller(OutputConfig([OutputRule(0,"led",17)]),
+                     factory=SimpleNamespace(LED=lambda *a,**kw: LED(*a,pin_factory=pins,**kw)))
+        self.addCleanup(c.close)
+        self.assertTrue(c.arm())
+        c.update(0)
+        deadline=time.monotonic()+1
+        pin=pins.pin(17)
+        while len(pin.states)<3 and time.monotonic()<deadline:
+            time.sleep(.02)
+        self.assertGreaterEqual(len(pin.states),3)
+        self.assertEqual([s.state for s in pin.states[:3]],[False,True,False])
+        c.neutral()
+        count=len(pin.states)
+        time.sleep(.35)
+        self.assertFalse(pin.state)
+        self.assertEqual(len(pin.states),count)
 
     def test_invalid_config_disarms_existing_gpio(self):
         c = self.controller
@@ -238,6 +264,28 @@ class ControllerTests(unittest.TestCase):
         self.now += 1.0
         self.assertFalse(c.check_watchdog())
 
+    def test_wrong_or_unknown_item_flashes_led_and_never_opens_servo(self):
+        c=self.controller
+        self.assertTrue(c.arm())
+        led,servo=self.factory.devices[17],self.factory.devices[18]
+        c.update(1)
+        self.assertEqual(servo.angle,90)
+        c.update(None,rejected=True)
+        self.assertEqual(servo.angle,0)
+        self.assertEqual(led.events[-1],"blink")
+        self.assertIn("FLASHING",c.state_text)
+        before=list(led.events)
+        c.update(None,rejected=True)
+        self.assertEqual(led.events,before)
+        c.update(None)
+        self.assertEqual(led.events[-1],"off")
+        self.assertEqual(servo.angle,0)
+        c.update(0)
+        self.assertEqual(led.events[-1],"blink")
+        c.update(1)
+        self.assertEqual(led.events[-1],"off")
+        self.assertEqual(servo.angle,90)
+
     def test_invalid_prediction_disarms_and_closed_controller_cannot_rearm(self):
         c = self.controller
         c.arm(); c.update(0)
@@ -266,7 +314,7 @@ class ControllerTests(unittest.TestCase):
         self.assertAlmostEqual(c._devices[1].angle, 90)
         self.assertGreater(pins.pin(18).state, 0)
         c.update(0)
-        self.assertTrue(pins.pin(17).state)
+        self.assertIsNotNone(c._devices[0]._blink_thread)
         self.assertAlmostEqual(c._devices[1].angle, 0)
         c.neutral()
         self.assertFalse(pins.pin(17).state)

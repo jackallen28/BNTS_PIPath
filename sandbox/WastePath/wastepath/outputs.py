@@ -102,7 +102,9 @@ class Controller:
         self.armed = False
         self.error = ""
         self._label = None
+        self._rejected = False
         self._applied_label = None
+        self._applied_rejected = False
         self._devices = {}
         self._last_update = None
         self._closed = False
@@ -120,11 +122,11 @@ class Controller:
             states = []
             for rule in self.config.rules:
                 name = "Waste" if rule.label == 0 else "Recycling"
-                active = self._label == rule.label
+                active = self._label == rule.label or (self._rejected and rule.kind=="led")
                 if rule.kind == "off":
                     states.append(f"{name}: Off")
                 elif rule.kind == "led":
-                    states.append(f"{name}: LED BCM{rule.pin} {'ON' if active else 'off'}")
+                    states.append(f"{name}: LED BCM{rule.pin} {'FLASHING' if active else 'off'}")
                 else:
                     angle = rule.active_angle if active else rule.rest_angle
                     states.append(f"{name}: servo BCM{rule.pin} {angle:g}°")
@@ -184,27 +186,33 @@ class Controller:
             if cleanup:
                 self.error = cleanup
 
-    def update(self, label):
+    def update(self, label, rejected=False):
         with self._lock:
             if label is not None and (type(label) is not int or label not in (0, 1)):
                 self._fault_locked("Invalid detection: no output can be activated")
                 return
+            if type(rejected) is not bool:
+                self._fault_locked("Invalid rejection state")
+                return
+            if rejected: label=None
             if self._closed or self.error:
                 self._label = None
                 return
             self._last_update = self.clock()
             self._label = label
-            if not self.armed or label == self._applied_label:
+            self._rejected = rejected
+            if not self.armed or (label == self._applied_label and rejected == self._applied_rejected):
                 return
             try:
                 # Withdraw the previous category before activating the next one.
                 for rule in self.config.rules:
-                    if rule.label != label:
+                    if not (rule.label==label or (rejected and rule.kind=="led")):
                         self._write(rule, False)
                 for rule in self.config.rules:
-                    if rule.label == label:
+                    if rule.label==label or (rejected and rule.kind=="led"):
                         self._write(rule, True)
                 self._applied_label = label
+                self._applied_rejected = rejected
             except Exception as exc:
                 self._fault_locked(f"GPIO write failed: {exc}")
 
@@ -216,11 +224,13 @@ class Controller:
             return
         device = self._devices[rule.label]
         if rule.kind == "led":
-            device.on() if active else device.off()
+            device.blink(on_time=.25,off_time=.25,background=True) if active else device.off()
         else:
             device.angle = rule.active_angle if active else rule.rest_angle
 
     def _release_locked(self):
+        self._rejected=False
+        self._applied_rejected=False
         self.armed = False
         errors = []
         for rule in self.config.rules:

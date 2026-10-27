@@ -1,113 +1,132 @@
+import hashlib
+import json
 import tempfile
 from pathlib import Path
 import unittest
+import cv2
 import numpy as np
-from wastepath.model import Sample, Model, Prediction, SteadyGate, requirements
+from wastepath.model import LABELS, Sample, Model, Prediction, SteadyGate, requirements
 from wastepath.storage import save, load
-from wastepath.camera import demo_frame
-from wastepath.vision import inspect, inspection_crop, to_lab, shrink
+from wastepath.camera import demo_frame, normalise_frame
+from wastepath.vision import inspect, to_lab, shrink, difference_mask
 
 
 def samples():
     rng=np.random.default_rng(12)
-    return [Sample(np.full(29,label*3,dtype=np.float32)+rng.normal(0,.025,29),label,f"item {label}-{group}")
-            for label in range(3) for group in range(2) for _ in range(8)]
+    return [Sample(np.full(29,label*3,dtype=np.float32)+rng.normal(0,.025,29),label,f"item {label}")
+            for label in range(2) for _ in range(10)]
 
 class ModelTests(unittest.TestCase):
-    def test_known_bins_and_negative_examples(self):
+    def test_ten_photos_per_category_suffice_without_people_or_named_groups(self):
+        self.assertEqual(LABELS,("Waste","Recycling"))
+        self.assertEqual(requirements(samples()),[])
+        self.assertTrue(requirements(samples()[:-1]))
         model=Model(samples())
         self.assertEqual(model.predict(np.zeros(29)).label,0)
+        model.reset_prediction()
         self.assertEqual(model.predict(np.full(29,3)).label,1)
-        p=model.predict(np.full(29,6))
-        self.assertIsNone(p.label)
-        self.assertIn("person",p.reason)
+        with self.assertRaises(ValueError): Model(samples()+[Sample(np.zeros(29),2)])
 
-    def test_unknown_is_withheld_even_with_unanimous_votes(self):
+    def test_unknown_is_rejected_even_with_unanimous_votes(self):
         p=Model(samples()).predict(np.full(29,-30))
         self.assertIsNone(p.label)
-        self.assertIn("new",p.reason)
+        self.assertIn("don't know",p.reason)
 
-    def test_ambiguous_votes_withheld(self):
-        rng=np.random.default_rng(2)
-        data=[Sample(rng.normal(0,.01,29),i%2,str(i)) for i in range(40)]
-        data.extend(Sample(np.full(29,8),2,str(i)) for i in range(8))
-        found=[Model(data).predict(rng.normal(0,.01,29)) for _ in range(20)]
-        self.assertTrue(any(p.label is None and "disagree" in p.reason for p in found))
+    def test_equal_votes_are_unsure_and_smoothing_resets_for_empty_table(self):
+        # Coincident measurements with opposing labels cannot decide a bin.
+        bank=[Sample(np.zeros(29),i%2) for i in range(20)]
+        model=Model(bank)
+        model.k=4
+        self.assertIsNone(model.predict(np.zeros(29)).label)
+        model.predict(None)
+        self.assertIsNone(model.probs)
 
-    def test_groups_required_and_quiz_leaves_whole_items_out(self):
-        bank=samples()
-        self.assertEqual(requirements(bank),[])
-        self.assertTrue(requirements([s for s in bank if s.group!="item 0-1"]))
-        rows=Model.group_quiz(bank)
-        self.assertEqual(len(rows),6)
-        self.assertTrue(all(r['total']==8 for r in rows))
-        self.assertTrue(all(r['correct']==8 for r in rows if r['label']<2))
-        self.assertTrue(all(r['withheld']==8 for r in rows if r['label']==2))
+    def test_photo_quiz_excludes_the_photo_and_reports_both_categories(self):
+        rows=Model.training_quiz(samples())
+        self.assertEqual(len(rows),2)
+        self.assertTrue(all(r['total']==10 and r['correct']==10 for r in rows))
 
-    def test_steady_gate_resets_on_motion_absence_change_and_quality(self):
-        gate=SteadyGate(1)
+    def test_action_gate_needs_consistency_and_clears_on_absence_or_change(self):
+        gate=SteadyGate(.5)
         waste=Prediction(0,1,"")
         self.assertIsNone(gate.apply(waste,now=0).label)
-        self.assertEqual(gate.apply(waste,now=1.1).label,0)
-        self.assertIsNone(gate.apply(waste,moving=True,now=1.2).label)
-        self.assertIsNone(gate.apply(waste,now=1.3).label)
-        self.assertIsNone(gate.apply(waste,reason="hand in view",now=2.4).label)
-        self.assertIsNone(gate.apply(waste,now=2.5).label)
-        self.assertIsNone(gate.apply(Prediction(None,0,"empty"),now=4).label)
-        self.assertIsNone(gate.apply(waste,now=4.1).label)
-        self.assertIsNone(gate.apply(Prediction(1,1,""),now=5.2).label)
+        self.assertEqual(gate.apply(waste,now=.6).label,0)
+        self.assertIsNone(gate.apply(Prediction(None,0,"empty"),now=.7).label)
+        self.assertIsNone(gate.apply(waste,now=.8).label)
+        self.assertEqual(gate.apply(waste,now=1.4).label,0)
+        self.assertIsNone(gate.apply(Prediction(1,1,""),now=1.5).label)
+
+    def test_votes_scaling_novelty_and_photo_quiz_match_uploaded_original(self):
+        fixture=json.loads((Path(__file__).parent/'fixtures/ml_camera_reference.json').read_text())
+        bank=[Sample(np.array(f,np.float32),label) for f,label in zip(fixture['features'],fixture['labels'])]
+        model=Model(bank)
+        np.testing.assert_allclose(model.scale,fixture['scale'],rtol=1e-6)
+        self.assertAlmostEqual(model.unknown_dist,fixture['unknown_dist'],places=6)
+        self.assertEqual(model.quiz,fixture['quiz'])
+        for case in fixture['queries']:
+            votes,index,distance=model.vote(np.array(case['feature'],np.float32))
+            np.testing.assert_allclose(votes,case['votes'],atol=1e-6)
+            self.assertEqual(index,case['nearest'])
+            self.assertAlmostEqual(distance,case['distance'],places=6)
 
 class VisionTests(unittest.TestCase):
-    def setUp(self):
-        self.bg=to_lab(shrink(inspection_crop(demo_frame())))
-    def observe(self,kind):
-        crop=inspection_crop(demo_frame(kind))
-        return inspect(crop,self.bg,shrink(crop))[0]
-    def test_empty_and_people_outside_inspection_area_are_excluded(self):
-        self.assertIsNone(self.observe("Empty table").feature)
-        self.assertIsNone(self.observe("Person outside area").feature)
-    def test_clean_item_has_features_and_hand_crossing_edge_is_blocked(self):
-        o=self.observe("Recycling")
+    def setUp(self): self.bg=to_lab(shrink(demo_frame()))
+    def test_empty_table_and_full_frame_object_detection(self):
+        self.assertIsNone(inspect(demo_frame(),self.bg)[0].feature)
+        frame=demo_frame()
+        cv2.rectangle(frame,(10,160),(105,280),(170,80,35),-1)
+        o,_=inspect(frame,self.bg)
+        self.assertIsNotNone(o.feature)  # The previous central crop missed this object.
+        self.assertFalse(o.reason)
+    def test_largest_changed_object_is_used_without_extra_edge_or_motion_gates(self):
+        frame=demo_frame("Waste")
+        cv2.rectangle(frame,(0,0),(35,35),(30,150,220),-1)
+        o,_=inspect(frame,self.bg,shrink(demo_frame()))
         self.assertEqual(o.feature.shape,(29,))
         self.assertFalse(o.reason)
-        hand=self.observe("People / hands / other")
-        self.assertIsNotNone(hand.feature)
-        self.assertIn("inside",hand.reason)
-    def test_movement_detected(self):
-        crop=inspection_crop(demo_frame("Waste"))
-        empty=shrink(inspection_crop(demo_frame()))
-        o,_=inspect(crop,self.bg,empty)
-        self.assertTrue(o.moving)
-    def test_demo_pipeline_bins_and_negative(self):
+        self.assertGreater(cv2.boundingRect(o.contour)[0],35)
+    def test_demo_pipeline_matches_bins_and_rejects_unfamiliar_item(self):
         bank=[]
-        for label,kind in enumerate(("Waste","Recycling","People / hands / other")):
-            for group in range(2):
-                for view in range(8):
-                    crop=inspection_crop(demo_frame(kind,view+group))
-                    o,_=inspect(crop,self.bg,shrink(crop))
-                    bank.append(Sample(o.feature,label,f"{kind}-{group}"))
+        for label,kind in enumerate(LABELS):
+            for view in range(10):
+                frame=demo_frame(kind,view)
+                bank.append(Sample(inspect(frame,self.bg)[0].feature,label))
         model=Model(bank)
-        self.assertEqual(model.predict(self.observe("Waste").feature).label,0)
-        self.assertEqual(model.predict(self.observe("Recycling").feature).label,1)
-        self.assertIsNone(model.predict(self.observe("People / hands / other").feature).label)
+        for label,kind in enumerate(LABELS):
+            model.reset_prediction()
+            self.assertEqual(model.predict(inspect(demo_frame(kind),self.bg)[0].feature).label,label)
+        self.assertIsNone(model.predict(inspect(demo_frame('Unknown item'),self.bg)[0].feature).label)
+    def test_original_segmentation_and_measurements_reference(self):
+        fixture=json.loads((Path(__file__).parent/'fixtures/ml_camera_reference.json').read_text())
+        for case in fixture['images']:
+            frame=demo_frame(case['kind'],case['variation'])
+            small=shrink(frame)
+            mask=difference_mask(small,self.bg,22)
+            self.assertEqual(hashlib.sha256(mask.tobytes()).hexdigest(),case['mask_sha256'])
+            np.testing.assert_allclose(inspect(frame,self.bg)[0].feature,case['feature'],atol=1e-6)
+    def test_widescreen_camera_is_cropped_without_stretching_shapes(self):
+        frame=np.zeros((480,960,3),np.uint8)
+        frame[:,160:800]=demo_frame('Recycling')
+        np.testing.assert_array_equal(normalise_frame(frame),demo_frame('Recycling'))
 
 class StorageTests(unittest.TestCase):
     def test_roundtrip_and_atomic_replace(self):
         with tempfile.TemporaryDirectory() as folder:
-            p=Path(folder)/"data.npz"
-            bg=np.zeros((240,320,3),np.float32)
+            p=Path(folder)/"data.npz"; bg=np.zeros((240,320,3),np.float32)
             save(p,samples(),bg)
             bank,background=load(p)
-            self.assertEqual(len(bank),48)
+            self.assertEqual(len(bank),20)
             np.testing.assert_array_equal(bank[0].feature,samples()[0].feature.astype(np.float32))
             save(p,[],bg)
             self.assertEqual(load(p)[0],[])
             self.assertEqual(list(Path(folder).iterdir()),[p])
-    def test_invalid_version_and_nonfinite_measurements_rejected(self):
+    def test_previous_cropped_training_and_invalid_measurements_rejected_without_changes(self):
         with tempfile.TemporaryDirectory() as folder:
             p=Path(folder)/"bad.npz"
-            for version,x in ((2,np.zeros((1,29))),(1,np.full((1,29),np.nan))):
-                np.savez(p,version=[version],features=x,labels=[0],groups=['x'],background=np.zeros((240,320,3)))
+            for version,x,label in ((1,np.zeros((1,29)),0),(2,np.full((1,29),np.nan),0),(2,np.zeros((1,29)),2)):
+                np.savez(p,version=[version],features=x,labels=[label],groups=['x'],background=np.zeros((240,320,3)))
+                original=p.read_bytes()
                 with self.assertRaises(ValueError): load(p)
+                self.assertEqual(p.read_bytes(),original)
 
 if __name__=="__main__": unittest.main()
