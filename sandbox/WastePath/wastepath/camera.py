@@ -1,4 +1,5 @@
 """Camera reads run off the Tk thread. Only the newest frame is retained."""
+from pathlib import Path
 import threading
 import time
 import cv2
@@ -27,8 +28,26 @@ def normalise_frame(frame):
     return cv2.resize(frame,(640,480),interpolation=cv2.INTER_AREA)
 
 
+def usb_cameras(root="/sys/class/video4linux"):
+    """Numbers of the USB webcams' picture devices (/dev/videoN), lowest first.
+
+    A Raspberry Pi 5 has its own video devices too (the ribbon-camera
+    interface and image processors), so /dev/video0 is not always the webcam.
+    """
+    found = []
+    for node in Path(root).glob("video[0-9]*"):
+        try:
+            # Each webcam has a picture device (index 0) and a metadata device.
+            if "/usb" in str((node / "device").resolve()) and (node / "index").read_text().strip() == "0":
+                found.append(int(node.name[5:]))
+        except (OSError, ValueError):
+            pass
+    return sorted(found)
+
+
 class Camera:
-    def __init__(self, index=0, demo=False):
+    """index=None finds the USB webcam each time it connects (it may be renumbered)."""
+    def __init__(self, index=None, demo=False):
         self.index, self.demo = index, demo
         self.kind = "Empty table"
         self.lock = threading.Lock()
@@ -49,7 +68,17 @@ class Camera:
                     self.stop_event.wait(.1)
                 else:
                     if cap is None:
-                        cap = cv2.VideoCapture(self.index, cv2.CAP_V4L2)
+                        index = self.index
+                        if index is None:
+                            found = usb_cameras()
+                            if not found:
+                                with self.lock:
+                                    self.latest = None
+                                    self.error = "No USB webcam found. Plug one in; it will connect by itself."
+                                self.stop_event.wait(2)
+                                continue
+                            index = found[0]
+                        cap = cv2.VideoCapture(index, cv2.CAP_V4L2)
                         cap.set(cv2.CAP_PROP_FRAME_WIDTH,640)
                         cap.set(cv2.CAP_PROP_FRAME_HEIGHT,480)
                         cap.set(cv2.CAP_PROP_BUFFERSIZE,1)

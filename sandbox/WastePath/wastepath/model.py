@@ -68,7 +68,7 @@ class Model:
         return np.sqrt(((self.Z - z) ** 2).sum(axis=1))
 
     def _vote(self, dists, skip=None):
-        order = np.argsort(dists)
+        order = np.argsort(dists, kind="stable")  # equal distances: same order on every NumPy
         if skip is not None:
             order = order[order != skip]
         votes = np.zeros(len(LABELS))

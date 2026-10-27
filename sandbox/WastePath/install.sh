@@ -35,3 +35,6 @@ if desktop.is_dir() and desktop != Path.home():
 print('WastePath installed. Open it from the Education menu or run:')
 print('/usr/bin/python3 '+str(root/'main.py'))
 PY
+echo
+# Readiness check: libraries, GPIO chip and the USB webcam. It never moves an output.
+/usr/bin/python3 "$APP_DIR/main.py" --check || echo "WastePath is installed. Fix the ✗ items above, then run: /usr/bin/python3 \"$APP_DIR/main.py\" --check"

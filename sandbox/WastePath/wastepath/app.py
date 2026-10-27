@@ -31,7 +31,7 @@ GUIDES = (
 
 
 class App(tk.Tk):
-    def __init__(self, data_dir, camera=0, demo=False):
+    def __init__(self, data_dir, camera=None, demo=False):
         super().__init__()
         self.title("WastePath · BNTS machine learning lab")
         self.geometry("1160x760")
@@ -68,7 +68,7 @@ class App(tk.Tk):
         self.step = 0
         self.busy = False
         self.train_result = None
-        self.camera_index = tk.StringVar(value=str(camera))
+        self.camera_index = tk.StringVar(value="auto" if camera is None else str(camera))
         self.demo = demo
         self.cam = Camera(camera,demo)
         self.label_var = tk.StringVar(value=LABELS[0])
@@ -192,9 +192,9 @@ class App(tk.Tk):
         tk.Entry(self.panel,textvariable=self.rule_var).pack(fill="x",pady=4)
         row=tk.Frame(self.panel,bg=C["bg"]); row.pack(fill="x",pady=8)
         self.text(row,"USB camera number:").pack(side="left")
-        tk.Entry(row,textvariable=self.camera_index,width=4).pack(side="left",padx=5)
+        tk.Entry(row,textvariable=self.camera_index,width=5).pack(side="left",padx=5)
         self.button(row,"Reconnect",self.reconnect).pack(side="left")
-        self.button(self.panel,"Photograph empty mat",self.calibrate).pack(fill="x",pady=6)
+        self.button(self.panel,"Photograph empty table",self.calibrate).pack(fill="x",pady=6)
         if self.background is not None and self.samples:
             self.button(self.panel,"Check saved table (empty mat)",self.check_saved).pack(fill="x",pady=6)
         tk.Scale(self.panel,from_=6,to=80,orient="horizontal",variable=self.threshold_var,
@@ -253,8 +253,9 @@ class App(tk.Tk):
         return True
 
     def reconnect(self):
-        try: index=int(self.camera_index.get()); assert index>=0
-        except (ValueError,AssertionError): self.status.set("Use a camera number such as 0 or 1."); return
+        text=self.camera_index.get().strip().lower()
+        try: index=None if text in ("","auto") else int(text); assert index is None or index>=0
+        except (ValueError,AssertionError): self.status.set("Use auto, or a camera number such as 0 or 1."); return
         self.stop_outputs()
         self.cam.close(); self.cam=Camera(index,self.demo)
         self.frame=None; self.last_seq=None; self.previous=None; self.calibrated=False; self.bg_frames=None

@@ -1,22 +1,53 @@
-# WastePath — TEST sandbox, version 0.3.0
+# WastePath — TEST sandbox, version 0.3.1
 
 A standalone PiPath-style waste/recycling camera workshop, based on your working
 **ML Camera** program. This version restores its recognition method and removes
 the people-training category. It remains separate from the main PiPath app.
 
-## Install or update
+## Set up a new Raspberry Pi 5
 
-On Raspberry Pi OS Desktop, Bookworm or newer, unzip the program somewhere
-permanent, open a terminal inside the WastePath folder, and run:
+Use Raspberry Pi OS Desktop (64-bit, Bookworm or Trixie), connected to the internet
+for the first install. Plug in the USB webcam, open **Terminal** and run:
+
+```sh
+git clone --depth 1 -b test-wastepath-gpio https://github.com/jackallen28/BNTS_PIPath.git ~/BNTS_PIPath
+cd ~/BNTS_PIPath/sandbox/WastePath
+bash install.sh
+```
+
+The installer asks for your password once (for `sudo apt-get`), adds the camera, Tk
+and GPIO packages, and creates a **WastePath** menu entry (Education) and a desktop
+icon. It finishes with a readiness check, something like this:
+
+```text
+WastePath check on Raspberry Pi 5 Model B Rev 1.0 (Debian GNU/Linux 13 (trixie))
+  ✓ Libraries: Python 3.13.5, Tk 8.6, OpenCV 4.10.0, NumPy 2.2.4, Pillow 11.1.0, gpiozero
+  ✓ GPIO: lgpio can use GPIO chip 4
+  ✓ Camera: /dev/video0 gives 640×480 pictures
+Ready to go.
+```
+
+Run the check again at any time with `/usr/bin/python3 main.py --check`. It never
+moves an output. Then open WastePath from the menu, or run `/usr/bin/python3 main.py`.
+
+**Update later:** `cd ~/BNTS_PIPath && git pull`, then run `bash install.sh` again.
+Saved training and GPIO settings in `~/WastePath` are kept.
+
+## Install from a copy
+
+On another Raspberry Pi OS Desktop, unzip the program somewhere permanent, open a
+terminal inside the WastePath folder, and run:
 
 ```sh
 bash install.sh
 /usr/bin/python3 main.py
 ```
 
-The installer adds the camera, Tk and GPIO packages and creates a menu/desktop
-launcher. Use a USB webcam. For another camera use `--camera 1`. For a no-camera
-walkthrough use `--demo`; the demo never enables physical GPIO.
+Use a USB webcam. WastePath finds it by itself (`auto` in Setup), even on a Pi 5
+whose own video devices also appear as `/dev/video*`, and reconnects if it is
+unplugged. To choose one yourself, type its number in Setup or start with
+`--camera 1`. For a no-camera walkthrough use `--demo`; the demo never enables
+physical GPIO.
 
 **Updating from 0.1/0.2:** replace the application files and run the installer again.
 Then take a new empty-table photo and retrain once. Older training used a central

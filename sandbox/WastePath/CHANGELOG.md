@@ -1,3 +1,16 @@
+# 0.3.1 — ready for a new Raspberry Pi 5
+
+- Find the USB webcam by itself. On a Pi 5, `/dev/video0` can belong to the ribbon
+  camera interface, so the first USB picture device is used, and found again if it is
+  unplugged and renumbered. A number typed in Setup, or `--camera N`, still works.
+- Add `main.py --check`, run at the end of `install.sh`: libraries, the GPIO chip
+  through lgpio, and a picture from the webcam. It never moves an output.
+- Equal-distance neighbours are ordered the same way on every NumPy (Pi OS Bookworm
+  ships NumPy 1.24), and the measurement reference test allows the older OpenCV in
+  Pi OS to round a few edge pixels differently.
+- The Setup button now says **Photograph empty table**, as the instructions do.
+- README: step-by-step setup for a new Pi 5.
+
 # 0.3.0 — restore the original ML Camera workflow
 
 - Restore original full-frame largest-object segmentation, colour/shape scaling,
