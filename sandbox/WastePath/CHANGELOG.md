@@ -1,3 +1,15 @@
+# 0.4.1 — automatic bin set-up
+
+- **4. Set up bin** now runs by itself, like the Arduino bin's power-up: the lid
+  lifts, closes 1° at a time until it presses the button, and asks "Is the lid
+  fully shut?" (Yes / Close 5° more / Start again). Then it opens 60° from closed
+  (or the saved opening) and asks "Is it open far enough?" (Yes, save it / Open 5°
+  more / less). Saving closes the lid onto the button.
+- A closed angle a little past the button press ("Close 5° more") is kept: in Live
+  the lid closes onto the button, then on to that angle (at most 15° further).
+- The set-up stops with a clear message if the button is still pressed after the
+  lid lifts, or never presses.
+
 # 0.4.0 — more photos, a calmer servo and bin set-up
 
 - **Servo like the BNTS Arduino bin:** opens at once and stays open at least 2 s;

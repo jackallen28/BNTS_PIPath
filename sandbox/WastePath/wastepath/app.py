@@ -340,10 +340,11 @@ class App(tk.Tk):
         rule=self.servo_rule()
         self.bin_vars={"servo":tk.StringVar(value=str(rule.pin)),
                        "button":tk.StringVar(value=str(rule.button_pin or 23)),
-                       "closes":tk.StringVar(value="up" if rule.rest_angle>rule.active_angle else "down"),
+                       # The Arduino bin closes towards 180°; keep a calibrated direction.
+                       "closes":tk.StringVar(value=("up" if rule.rest_angle>rule.active_angle else "down") if rule.button_pin else "up"),
                        "label":tk.StringVar(value=LABELS[rule.label])}
         if self.demo:
-            self.text(self.panel,"DEMO: a pretend lid. Its button presses at 120°, so choose 'towards 180°'.",
+            self.text(self.panel,"DEMO: a pretend lid. Its button presses at 120°.",
                       bg=C["warn"],wraplength=350,pady=4).pack(fill="x")
         form=tk.Frame(self.panel,bg=C["bg"]); form.pack(fill="x",pady=4)
         self.text(form,"Lid opens for:").grid(row=0,column=0,sticky="w")
@@ -358,19 +359,10 @@ class App(tk.Tk):
             tk.Radiobutton(turn,text=text,value=value,variable=self.bin_vars["closes"],bg=C["bg"]).pack(anchor="w")
         self.bin_dial=tk.Canvas(self.panel,width=340,height=140,bg="white",highlightthickness=1,highlightbackground="#808080")
         self.bin_dial.pack(fill="x",pady=4)
-        self.bin_note=self.text(self.panel,"",wraplength=350,bg="white",pady=6,padx=6)
+        self.bin_note=self.text(self.panel,"",wraplength=340,bg="white",pady=8,padx=8,font=(self.ui_font,11,"bold"))
         self.bin_note.pack(fill="x")
-        self.bin_buttons={}
-        def add(key,text,command,parent=None,**pack):
-            b=self.button(parent or self.panel,text,command); b.pack(**(pack or {"fill":"x","pady":3}))
-            self.bin_buttons[key]=b
-        add("find","1. Find the closed position",self.bin_find)
-        row=tk.Frame(self.panel,bg=C["bg"]); row.pack(fill="x",pady=3)
-        add("more","2. Open 5° more",lambda:self.bin_open(1),row,side="left",fill="x",expand=True)
-        add("less","5° less",lambda:self.bin_open(-1),row,side="left",padx=(6,0))
-        add("test","3. Test: open, then close",self.bin_test)
-        add("save","4. Save the bin settings",self.bin_save)
-        add("stop","Stop and close the lid",self.release_bin)
+        self.bin_actions=tk.Frame(self.panel,bg=C["bg"]); self.bin_actions.pack(fill="x",pady=4)
+        self.bin_shown=object()   # the set-up step whose buttons are showing
         self.bin_wiring=self.text(self.panel,"",bg=C["warn"],wraplength=350,pady=6,padx=6)
         self.bin_wiring.pack(fill="x",pady=4)
         for var in ("servo","button"):
@@ -401,52 +393,60 @@ class App(tk.Tk):
         validate_config(OutputConfig(other+[trial]))
         return servo,button,label
 
-    def bin_find(self):
-        if self.bin is None:
-            try:
-                servo,button,_=self.bin_settings()
-            except ValueError as e:
-                self.status.set(f"Check the bin settings: {e}"); return
-            self.stop_outputs()
-            if self.lids_busy():
-                self.status.set("Wait a moment: the lid is still closing."); return
-            rule=self.servo_rule()
-            closes_up=self.bin_vars["closes"].get()=="up"
-            start=rule.active_angle if rule.button_pin and (rule.rest_angle>rule.active_angle)==closes_up else 90
-            try:
-                factory=SimulatedBin() if self.demo else None
-                if factory is None:
-                    import gpiozero as factory
-                self.bin=BinSetup(factory,servo,button,closes_up,start)
-            except Exception as e:
-                self.bin=None
-                self.status.set(f"The servo or button could not start: {e}"); return
-        if self.bin.find_closed():
-            self.status.set("Finding the closed position: the lid closes slowly until it presses the button…")
+    def bin_start(self):
+        """Automatic set-up: home onto the button, then ask the student to confirm."""
+        self.release_bin()
+        try:
+            servo,button,_=self.bin_settings()
+        except ValueError as e:
+            self.status.set(f"Check the bin settings: {e}"); return
+        self.stop_outputs()
+        if self.lids_busy():
+            self.status.set("Wait a moment: the lid is still closing."); return
+        rule=self.servo_rule()
+        closes_up=self.bin_vars["closes"].get()=="up"
+        calibrated=rule.button_pin and (rule.rest_angle>rule.active_angle)==closes_up
+        # Start from the saved open angle, or 60° short of the far end.
+        start=rule.active_angle if calibrated else (120 if not closes_up else 60)
+        opening=abs(rule.rest_angle-rule.active_angle) if calibrated else 60
+        try:
+            factory=SimulatedBin() if self.demo else None
+            if factory is None:
+                import gpiozero as factory
+            self.bin=BinSetup(factory,servo,button,closes_up,start,opening)
+        except Exception as e:
+            self.bin=None
+            self.status.set(f"The servo or button could not start: {e}"); return
+        self.bin.start()
+        self.status.set("Setting up: the lid lifts, then closes slowly until it presses the button…")
+        self.draw_bin()
+
+    def bin_shut(self):
+        if self.bin is not None and self.bin.lid_is_shut():
+            self.status.set(f"Lid open at {self.bin.open_angle:g}°.")
+            self.draw_bin()
+
+    def bin_close_more(self):
+        if self.bin is None: return
+        if not self.bin.close_more():
+            self.status.set("It can't close further. Move the button so the shut lid presses it.")
         else:
-            self.status.set(self.bin.lid.fault)
+            self.status.set(f"Closed angle now {self.bin.closed:g}°.")
         self.draw_bin()
 
     def bin_open(self,steps):
-        if self.bin is None or self.bin.closed_angle is None:
-            self.status.set("First press 1. Find the closed position."); return
-        self.bin.open_by(steps)
-        self.status.set(f"Lid open at {self.bin.open_angle:g}°. Keep pressing Open 5° more until it opens far enough.")
-        self.draw_bin()
-
-    def bin_test(self):
-        if self.bin is None or not self.bin.test_cycle():
-            self.status.set("Find the closed position and open the lid first."); return
-        self.status.set("Testing: the lid stays open for 2 seconds, then closes until the button presses.")
+        if self.bin is not None and self.bin.open_by(steps):
+            self.status.set(f"Lid open at {self.bin.open_angle:g}°.")
+            self.draw_bin()
 
     def bin_save(self):
         if self.bin is None or not self.bin.ready:
-            self.status.set("Find the closed position and set how far it opens first."); return
+            self.status.set("Run the bin set-up first."); return
         label=LABELS.index(self.bin_vars["label"].get())
         rules=[r for r in self.outputs.config.rules if r.label!=label]+[self.bin.rule(label)]
         config=OutputConfig(sorted(rules,key=lambda r:r.label))
-        closed,opened,button=self.bin.closed_angle,self.bin.open_angle,self.bin.button_pin
-        self.release_bin()
+        closed,opened,button=self.bin.closed,self.bin.open_angle,self.bin.button_pin
+        self.release_bin()   # the lid closes onto the button
         if self.apply_output_config(config):
             self.show_step(LIVE if self.model is not None else BIN)
             self.status.set(f"Bin saved: closed at {closed:g}°, open at {opened:g}°, button on GPIO{button}. "
@@ -462,6 +462,27 @@ class App(tk.Tk):
             self.bin=None
             if self.step==BIN and hasattr(self,"bin_dial"): self.draw_bin()
 
+    def bin_prompt(self):
+        """What to ask, and which buttons to show, for the set-up step we're on."""
+        b=self.bin
+        phase=b.update() if b is not None else None
+        if b is None:
+            return None,"Wire the servo and button, then press Start. The lid closes onto the button by itself.",[
+                ("Start bin set-up",self.bin_start,"active")]
+        if phase=="homing":
+            return phase,"Finding closed… the lid closes slowly until it presses the button.",[
+                ("Stop",self.release_bin,"normal")]
+        if phase=="no press":
+            return phase,"⚠ "+(b.lid.fault or "The button didn't press.")+" Check the button's wires, or choose the other way to close, then try again.",[
+                ("Try again",self.bin_start,"active")]
+        if phase=="confirm closed":
+            return phase,f"The button pressed at {b.lid.found:g}°. Is the lid fully shut?",[
+                ("Yes, it's shut",self.bin_shut,"active"),("Close 5° more",self.bin_close_more,"normal"),
+                ("Start again",self.bin_start,"normal")]
+        return phase,f"The lid is open at {b.open_angle:g}°. Is it open far enough?",[
+            ("Yes, save it",self.bin_save,"active"),("Open 5° more",lambda:self.bin_open(1),"normal"),
+            ("Open 5° less",lambda:self.bin_open(-1),"normal")]
+
     def draw_bin(self):
         if self.step!=BIN or not hasattr(self,"bin_dial"): return
         d=self.bin_dial; d.delete("all")
@@ -472,9 +493,9 @@ class App(tk.Tk):
         b=self.bin
         def ray(angle,colour,width):
             d.create_line(cx,cy,cx+r*math.cos(math.radians(angle)),cy-r*math.sin(math.radians(angle)),fill=colour,width=width)
-        if b is not None and b.closed_angle is not None:
-            ray(b.closed_angle,C["purple"],3)
-            d.create_text(10,14,anchor="w",text=f"— closed {b.closed_angle:g}°",fill=C["purple"],font=(self.ui_font,9,"bold"))
+        if b is not None and b.closed is not None:
+            ray(b.closed,C["purple"],3)
+            d.create_text(10,14,anchor="w",text=f"— closed {b.closed:g}°",fill=C["purple"],font=(self.ui_font,9,"bold"))
         if b is not None and b.open_angle is not None:
             ray(b.open_angle,C["ok"],3)
             d.create_text(10,32,anchor="w",text=f"— open {b.open_angle:g}°",fill=C["ok"],font=(self.ui_font,9,"bold"))
@@ -484,21 +505,23 @@ class App(tk.Tk):
             pressed=b.pressed
             d.create_oval(10,cy-14,26,cy+2,fill=C["ok"] if pressed else "white",outline="#000000")
             d.create_text(32,cy-6,anchor="w",text="Button pressed" if pressed else "Button up",font=(self.ui_font,8))
-            d.create_text(w-10,14,anchor="e",text=f"Servo {b.lid.position:g}° · {b.lid.state}",font=(self.ui_font,9))
+            d.create_text(w-10,14,anchor="e",text=f"Servo {b.lid.position:g}°",font=(self.ui_font,9))
         else:
-            d.create_text(cx,cy-40,text="Servo off. Press 1. Find the closed position.",fill="#808080")
-        # Explain the next thing to do.
-        if b is None: note="Wire the servo and button, choose their pins, then press 1."
-        elif b.homing: note="Closing slowly… it stops when the lid presses the button."
-        elif b.lid.fault: note="⚠ "+b.lid.fault
-        elif b.closed_angle is None: note="The button didn't press. Check its wires and which way the lid closes, then press 1 again."
-        elif b.open_angle is None: note=f"✓ Closed at {b.closed_angle:g}°. Now press 2. Open 5° more until the lid opens far enough."
-        else: note=f"Opens to {b.open_angle:g}° ({abs(b.closed_angle-b.open_angle):g}° from closed). Try 3. Test, then 4. Save."
+            d.create_text(cx,cy-40,text="Servo off",fill="#808080")
+        phase,note,actions=self.bin_prompt()
         self.bin_note.configure(text=note)
-        ready=b is not None and b.ready
-        for key,on in (("more",b is not None and b.closed_angle is not None),("less",b is not None and b.open_angle is not None),
-                       ("test",ready),("save",ready),("stop",b is not None)):
-            self.bin_buttons[key].configure(state="normal" if on else "disabled")
+        if phase!=self.bin_shown:
+            # New question: new buttons (only when the step changes, not every tick).
+            self.bin_shown=phase
+            if phase=="confirm closed": self.status.set("Button found: the lid is closed.")
+            elif phase=="no press": self.status.set("The set-up stopped. Read the note above the buttons.")
+            for child in self.bin_actions.winfo_children(): child.destroy()
+            self.bin_buttons={}
+            for text,command,default in actions:
+                button=self.button(self.bin_actions,text,command,default=default,
+                                   font=(self.ui_font,11,"bold") if default=="active" else None)
+                button.pack(fill="x",pady=3)
+                self.bin_buttons[text]=button
 
     def fresh(self):
         if self.frame is None or time.monotonic()-self.frame_time>1:

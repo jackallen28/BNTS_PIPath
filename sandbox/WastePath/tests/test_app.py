@@ -282,32 +282,39 @@ class WorkshopTests(unittest.TestCase):
         if capture:
             a.update(); subprocess.run(["import","-window",str(a.winfo_id()),capture],check=True)
 
-    def test_bin_setup_finds_closed_sets_open_and_saves(self):
+    def test_bin_setup_is_automatic_with_yes_no_questions(self):
         a=self.app
         self.train_workshop()
         a.show_step(5)
         self.assertEqual(a.step,5)
-        a.bin_vars["closes"].set("up")
-        a.bin_find()
-        self.assertTrue(self.wait(lambda:a.bin.closed_angle is not None))
-        self.assertEqual(a.bin.closed_angle,120)
-        self.assertIn("Closed at 120",(a.draw_bin(),a.bin_note.cget("text"))[1])
-        for _ in range(8): a.bin_open(1)
-        self.assertEqual(a.bin.open_angle,80)
-        a.bin_test()
-        self.assertTrue(self.wait(lambda:a.bin.lid.state=="closed" and a.bin.lid.found==120))
+        self.assertEqual(a.bin_vars["closes"].get(),"up")   # like the Arduino bin
+        self.assertEqual(list(a.bin_buttons),["Start bin set-up"])
+        a.bin_buttons["Start bin set-up"].invoke()
+        self.assertTrue(self.wait(lambda:"Is the lid fully shut" in a.bin_note.cget("text")))
+        self.assertIn("pressed at 120",a.bin_note.cget("text"))
+        a.bin_buttons["Yes, it's shut"].invoke()
+        self.assertEqual(a.bin.open_angle,60)
+        self.assertIn("open at 60",a.bin_note.cget("text"))
+        a.bin_buttons["Open 5° less"].invoke(); a.bin_buttons["Open 5° less"].invoke()
+        self.assertEqual(a.bin.open_angle,70)
         a.update()
         capture=os.environ.get("WASTEPATH_TEST_SCREENSHOT_BIN")
         if capture:
             a.draw_bin(); a.update(); subprocess.run(["import","-window",str(a.winfo_id()),capture],check=True)
-        a.bin_save()
+        a.bin_buttons["Yes, save it"].invoke()
         rule=[r for r in a.outputs.config.rules if r.kind=="servo"][0]
-        self.assertEqual((rule.label,rule.pin,rule.button_pin,rule.active_angle,rule.rest_angle),(1,18,23,80,120))
+        self.assertEqual((rule.label,rule.pin,rule.button_pin,rule.active_angle,rule.rest_angle),(1,18,23,70,120))
         self.assertTrue((Path(self.tmp.name)/"outputs.json").exists())
         self.assertEqual(a.step,4)
         self.assertIsNone(a.bin)
         self.assertIn("Bin saved",a.status.get())
+        # Running it again starts from the saved open angle and opening.
+        self.assertTrue(self.wait(lambda:not a.lids_busy()))
+        a.show_step(5); a.bin_start()
+        self.assertEqual((a.bin.start_angle,a.bin.opening),(70,50))
+        a.release_bin()
         # The GPIO window keeps the button when saved again.
+        self.assertTrue(self.wait(lambda:not a.lids_busy()))
         a.show_outputs(); a.output_dialog.apply()
         self.assertEqual([r for r in a.outputs.config.rules if r.kind=="servo"][0].button_pin,23)
 
@@ -316,14 +323,15 @@ class WorkshopTests(unittest.TestCase):
         a.show_step(5)                              # works before the camera is set up
         self.assertEqual(a.step,5)
         a.bin_vars["closes"].set("down")            # wrong way for the pretend lid
-        a.bin_find()
-        self.assertTrue(self.wait(lambda:a.bin.lid.state=="closed"))
-        a.draw_bin()
-        self.assertIsNone(a.bin.closed_angle)
-        self.assertIn("didn't press",a.bin_note.cget("text"))
-        self.assertEqual(str(a.bin_buttons["save"].cget("state")),"disabled")
+        a.bin_start()
+        self.assertTrue(self.wait(lambda:"Try again" in a.bin_buttons))
+        self.assertIn("⚠",a.bin_note.cget("text"))
+        a.bin_vars["closes"].set("up")
+        a.bin_buttons["Try again"].invoke()
+        self.assertTrue(self.wait(lambda:"Yes, it's shut" in a.bin_buttons))
         a.bin_vars["button"].set("18")              # same pin as the servo
-        a.release_bin(); a.bin_find()
+        a.release_bin(); self.assertTrue(self.wait(lambda:not a.lids_busy()))
+        a.bin_start()
         self.assertIn("different BCM pin",a.status.get())
 
 if __name__=="__main__": unittest.main()

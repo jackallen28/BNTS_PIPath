@@ -1,3 +1,11 @@
+# Version 0.4.1 validation
+
+**55 tests passed.** New: the automatic set-up homes on the pretend lid's button
+(120°), opens 60° from closed, adjusts 5° at a time, saves, and closes onto the
+button; "Close 5° more" is kept and used in Live (onto the button, then on to the
+saved angle); a button still pressed after lifting, and the wrong direction, both
+stop with a message. Checked on screen at 1024×640 in the demo.
+
 # Version 0.4.0 validation
 
 **53 tests passed** (12 new). New tests drive the servo with fake, gpiozero mock and

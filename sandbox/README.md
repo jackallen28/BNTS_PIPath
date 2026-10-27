@@ -1,6 +1,6 @@
 # Test programs sandbox
 
-**WastePath 0.4.0** is a standalone waste/recycling camera workshop for evaluation
+**WastePath 0.4.1** is a standalone waste/recycling camera workshop for evaluation
 before a later PiPath integration. The main PiPath application is unchanged and
 nothing in this folder starts automatically.
 

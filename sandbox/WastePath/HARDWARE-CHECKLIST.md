@@ -16,9 +16,10 @@ safe example items and a small supervised mechanism, starting with simulation.
   Train screen asks you to train again. Use **+ Add more … photos** from the quiz.
 - Wire the closed button (BCM23 / pin 16 to GND / pin 14, never 5 V). Open
   **4. Set up bin**: the dial should show "Button pressed" when you press it by hand.
-- **Find the closed position:** the lid closes slowly and stops as the button
-  presses. Wrong way? Choose the other direction and try again.
-- **Open 5° more** until the lid opens far enough, **Test**, then **Save**.
+- Press **Start bin set-up**: the lid lifts, closes slowly and stops as the button
+  presses. Wrong way? Choose the other direction and **Try again**.
+- Answer **Is the lid fully shut?** (use **Close 5° more** if it isn't), then check
+  it opens about 60° by itself. Adjust with **Open 5° more / less**, then **Yes, save it**.
 - Present known recycling: lid opens at once, LED off. Present waste: LED flashes,
   lid stays shut. Present an unfamiliar item: lid stays shut and LED flashes.
   Remove the recycling: after about 2 s the lid sweeps shut, stops on the button and

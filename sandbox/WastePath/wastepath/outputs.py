@@ -127,6 +127,8 @@ class ServoDriver:
         self._want_open = False
         self._releasing = False
         self._limit = self.closed_angle
+        self._homing = False
+        self._pressed_at = None
         self._since = self._opened_at = time.monotonic()
         self._release_checked = True
         self._lock = threading.RLock()
@@ -161,18 +163,17 @@ class ServoDriver:
             self._want_open = False
 
     def home(self, start, direction):
-        """Calibration: sweep from `start` towards 0° or 180° until the button presses."""
+        """Calibration: lift the lid to `start`, then sweep towards 0° or 180°
+        until the button presses (like the Arduino bin at power-up)."""
         with self._lock:
             self.direction = 1 if direction > 0 else -1
             self.found = None
             self.fault = ""
             self._want_open = False
-            if self.pressed():
-                self.fault = "The closed button is already pressed. Lift the lid off it, then try again."
-                return False
-            end = 180.0 if self.direction > 0 else 0.0
-            self.closed_angle = end   # if the button never presses, stop at the end
-            self._start_closing(float(start), end)
+            self._homing = True
+            self.closed_angle = 180.0 if self.direction > 0 else 0.0   # no press: stop at the end
+            self._write(float(start))
+            self._enter("lifting")
             return True
 
     def release(self):
@@ -197,8 +198,10 @@ class ServoDriver:
             return self.closed_angle
         return min(180.0, max(0.0, self.closed_angle + self.direction * self.OVERTRAVEL))
 
-    def _start_closing(self, start, limit):
+    def _start_closing(self, start, limit, homing=False):
         self._limit = limit
+        self._homing = homing
+        self._pressed_at = None
         self._write(start)
         self._enter("closing")
 
@@ -214,7 +217,17 @@ class ServoDriver:
             self.servo.angle = None   # stop the pulses: the servo goes limp
 
     def _step(self, now):
-        if self.state == "open":
+        if self.state == "lifting":
+            # Give the lid time to lift off the button before sweeping closed.
+            if now - self._since >= self.RELEASE_SECONDS:
+                if self.pressed():
+                    self.fault = (f"The button is still pressed at {self.position:g}°. Is the button stuck, "
+                                  "or does the lid close the other way?")
+                    self._write(None)
+                    self._enter("closed")
+                else:
+                    self._start_closing(self.position, self.closed_angle, homing=True)
+        elif self.state == "open":
             if not self._release_checked and now - self._opened_at >= self.RELEASE_SECONDS:
                 self._release_checked = True
                 if self.pressed():
@@ -223,9 +236,16 @@ class ServoDriver:
                 self._start_closing(self.position, self._sweep_limit())
         elif self.state == "closing":
             if self.pressed():
-                self.found = self.position
-                self.fault = ""
-                self._enter("settling")
+                if self._pressed_at is None:
+                    self._pressed_at = self.found = self.position
+                    self.fault = ""
+                # A saved closed angle a little past the press point ("close 5° more").
+                remaining = (self.closed_angle - self.position) * self.direction
+                if (not self._homing and remaining > 0 and
+                        (self.closed_angle - self._pressed_at) * self.direction <= self.OVERTRAVEL):
+                    self._write(self.position + self.direction * min(1.0, remaining))
+                else:
+                    self._enter("settling")
             elif (self.position - self._limit) * self.direction >= 0:
                 if self.button is not None:
                     # Like the Arduino's FALLBACK_CLOSED_ANGLE: rest at the saved angle.

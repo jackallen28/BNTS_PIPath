@@ -234,7 +234,7 @@ class ControllerTests(unittest.TestCase):
 
     def test_closing_stops_when_the_lid_presses_the_button(self):
         self.factory.pressed = lambda angle: angle is not None and angle >= 120
-        c = Controller(OutputConfig([OutputRule(1, "servo", 18, 70, 125, 23)]), factory=self.factory)
+        c = Controller(OutputConfig([OutputRule(1, "servo", 18, 70, 120, 23)]), factory=self.factory)
         self.addCleanup(c.close)
         self.assertTrue(c.arm())
         lid, servo = c._devices[1], self.factory.devices[18]
@@ -489,39 +489,73 @@ class BinSetupTests(unittest.TestCase):
     def setUp(self):
         fast_servo(self)
 
-    def test_finds_closed_then_opens_in_five_degree_steps_and_tests(self):
-        sim = SimulatedBin(closed_at=120)
-        setup = BinSetup(sim, 18, 23, closes_up=True, start_angle=90)
+    def setup_for(self, sim, closes_up=True, start=60, opening=60):
+        setup = BinSetup(sim, 18, 23, closes_up=closes_up, start_angle=start, opening=opening)
         self.addCleanup(lambda: setup.release().join(3))
-        self.assertTrue(setup.find_closed())
-        self.assertTrue(wait_for(lambda: setup.lid.state == "closed"))
-        self.assertEqual(setup.closed_angle, 120)
+        return setup
+
+    def finish(self, setup):
+        self.assertTrue(wait_for(lambda: setup.update() != "homing"))
+        return setup.phase
+
+    def test_homes_on_the_button_then_opens_by_itself(self):
+        sim = SimulatedBin(closed_at=120)
+        setup = self.setup_for(sim)
+        setup.start()
+        self.assertEqual(setup.phase, "homing")
+        self.assertEqual(self.finish(setup), "confirm closed")
+        self.assertEqual(setup.closed, 120)
         self.assertTrue(setup.pressed)
         self.assertFalse(setup.ready)
-        setup.open_by(-1)                       # never closer than 5° from closed
+        self.assertTrue(setup.lid_is_shut())
+        self.assertEqual(setup.phase, "confirm open")
+        self.assertEqual(setup.open_angle, 60)          # 60° from closed
+        self.assertEqual(sim.servo.last, 60)
+        setup.open_by(1)
+        self.assertEqual(setup.open_angle, 55)
+        for _ in range(20): setup.open_by(-1)           # never closer than 5° from closed
         self.assertEqual(setup.open_angle, 115)
-        for _ in range(9): setup.open_by(1)
-        self.assertEqual(setup.open_angle, 70)
-        self.assertEqual(sim.servo.last, 70)
-        setup.open_by(-1)
-        self.assertEqual(setup.open_angle, 75)
-        self.assertTrue(setup.test_cycle())
-        self.assertTrue(wait_for(lambda: setup.lid.state == "closed"))
-        self.assertEqual(setup.lid.found, 120)
         rule = setup.rule(1)
-        self.assertEqual((rule.pin, rule.button_pin, rule.active_angle, rule.rest_angle), (18, 23, 75, 120))
+        self.assertEqual((rule.pin, rule.button_pin, rule.active_angle, rule.rest_angle), (18, 23, 115, 120))
         validate_config(OutputConfig([rule]))
+        lid = setup.release()
+        self.assertTrue(lid.join(3))
+        self.assertEqual(sim.servo.last, 120)           # closed onto the button before stopping
+
+    def test_close_more_saves_a_closed_angle_just_past_the_press(self):
+        sim = SimulatedBin(closed_at=120)
+        setup = self.setup_for(sim)
+        setup.start(); self.finish(setup)
+        self.assertTrue(setup.close_more())
+        self.assertEqual((setup.closed, sim.servo.last), (125, 125))
+        for _ in range(5): setup.close_more()
+        self.assertEqual(setup.closed, 135)             # at most 15° past the press
+        setup.lid_is_shut()
+        self.assertEqual(setup.open_angle, 75)
+        rule = setup.rule(1)
+        # In Live it closes onto the button and then on to the saved 135°.
+        lid = ServoDriver(sim.AngularServo(18), rule.active_angle, rule.rest_angle,
+                          sim.InputDevice(23), home=False)
+        self.addCleanup(lid.stop_now)
+        lid.open(); lid.close()
+        self.assertTrue(wait_for(lambda: lid.state == "closed"))
+        self.assertEqual((lid.found, lid.position), (120, 135))
 
     def test_wrong_direction_reaches_the_end_without_a_press(self):
         sim = SimulatedBin(closed_at=120)
-        setup = BinSetup(sim, 18, 23, closes_up=False, start_angle=90)
-        self.addCleanup(lambda: setup.release().join(3))
-        setup.find_closed()
-        self.assertTrue(wait_for(lambda: setup.lid.state == "closed"))
-        self.assertIsNone(setup.closed_angle)
+        setup = self.setup_for(sim, closes_up=False, start=110)
+        setup.start()
+        self.assertEqual(self.finish(setup), "no press")
         self.assertEqual(sim.servo.last, 0)
         self.assertIn("didn't press", setup.lid.fault)
-        self.assertFalse(setup.open_by(1))
+        self.assertFalse(setup.lid_is_shut())
+
+    def test_button_still_pressed_after_lifting_is_reported(self):
+        sim = SimulatedBin(closed_at=120)
+        setup = self.setup_for(sim, start=130)          # lifting the "wrong" way keeps it pressed
+        setup.start()
+        self.assertEqual(self.finish(setup), "no press")
+        self.assertIn("still pressed at 130", setup.lid.fault)
 
 
 if __name__ == '__main__':

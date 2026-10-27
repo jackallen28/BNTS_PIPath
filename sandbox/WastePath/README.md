@@ -1,4 +1,4 @@
-# WastePath — TEST sandbox, version 0.4.0
+# WastePath — TEST sandbox, version 0.4.1
 
 A standalone PiPath-style waste/recycling camera workshop, based on your working
 **ML Camera** program. This version restores its recognition method and removes
@@ -131,15 +131,23 @@ Without a button, the servo still sweeps slowly to the closed angle and goes lim
   button to 5 V** (the Arduino bin's 5 V + 10k wiring would damage a Pi pin). Fix it
   where the shut lid presses it.
 
-### 4. Set up bin (hardware calibration)
+### 4. Set up bin (automatic calibration)
+
+Like the Arduino bin at power-up, it finds the closed position by itself:
 
 1. Choose which bin the lid opens for, the servo and button GPIO numbers, and which
-   way the servo turns to close (the Arduino bin closes towards 180°).
-2. **Find the closed position:** the lid sweeps closed until it presses the button.
-   The dial shows the servo angle and the button.
-3. **Open 5° more:** press until the lid opens far enough (**5° less** goes back).
-4. **Test:** opens, waits 2 s, then closes until the button presses.
-5. **Save the bin settings.** The angles and button are kept in `outputs.json`.
+   way the servo turns to close (the Arduino bin closes towards 180°, the default).
+2. Press **Start bin set-up**. The lid lifts a little, then closes 1° at a time
+   until it **presses the button**: that is "closed".
+3. **Is the lid fully shut?** Press **Yes, it's shut**, or **Close 5° more** (up to
+   15° past the button) if it isn't quite down.
+4. The lid opens by itself, **60° from closed** (or the saved opening when you run it
+   again). **Is it open far enough?** Press **Yes, save it**, or **Open 5° more /
+   less** first.
+5. It closes onto the button and saves the angles and the button in `outputs.json`.
+
+If the button never presses, or stays pressed after the lid lifts, it stops and
+asks you to check the button or choose the other way to close, then **Try again**.
 
 In `--demo` the bin step uses a pretend lid whose button presses at 120°.
 **GPIO outputs** still lets you type angles and pins yourself, including the button
