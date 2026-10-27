@@ -1,6 +1,7 @@
 """Standalone Tk workshop, with PiPath's teal desktop and bevelled silver panels."""
 from collections import Counter
 import json
+import math
 from pathlib import Path
 import threading
 import shutil
@@ -12,21 +13,27 @@ import cv2
 import numpy as np
 from PIL import Image, ImageTk
 from .camera import Camera
-from .outputs import Controller, default_config, load_config, save_config, validate_config
-from .output_ui import OutputDialog
+from .outputs import Controller, OutputConfig, OutputRule, default_config, load_config, save_config, validate_config
+from .output_ui import OutputDialog, HEADER_PINS
+from .bin_setup import BinSetup, SimulatedBin
 from .model import LABELS, MIN_PHOTOS, Model, Sample, Prediction, SteadyGate, requirements
 from .storage import save, load
 from .vision import inspection_crop, shrink, to_lab, inspect, difference_mask
 
 C = {"desk":"#008080","bg":"#C0C0C0","purple":"#704988","teal":"#19C1CA",
      "ink":"#000000","muted":"#3C3C3C","warn":"#FFFFE1","ok":"#007A3D"}
-STEPS = ("Set up", "Teach", "Train", "Test", "Live")
+STEPS = ("Set up", "Teach", "Train", "Test", "Live", "Set up bin")
+# Step 5 (the bin) sits after Train on screen; the other numbers stay as they were.
+NAV_ORDER = (0, 1, 2, 5, 3, 4)
+LIVE, BIN = 4, 5
+THUMB_W, THUMB_H = 62, 46
 GUIDES = (
     ("Photograph the empty table", "Aim the camera at a plain table with steady lighting, as in ML Camera. The whole picture is used. Clear the table and keep the camera fixed.\n\nPress Photograph empty table. The app averages 10 frames to learn the background. If outlines miss an item, reduce the threshold; if shadows appear, increase it."),
-    ("Teach Waste and Recycling", "Take 10 photos of Waste, then 10 of Recycling. Turn or move the object between photos, with your hand out of view. Include different items if you want it to learn more examples.\n\nThe item name is optional. There is no people or hands training category."),
+    ("Teach Waste and Recycling", "Take at least 10 photos of Waste, then 10 of Recycling. Turn or move the object between photos, with your hand out of view. You can keep adding photos: more items, sides and positions make it smarter.\n\nThe item name is optional. There is no people or hands training category."),
     ("Train the camera", "The computer measures colour and shape, then uses the same five-neighbour learning method as your original ML Camera.\n\nThe photo quiz is practice, not a measure of accuracy on new items. Start sorting after training, or use Test to record fresh examples."),
     ("Try fresh items", "Show an item that was not in the training photos. Record whether it is Waste, Recycling or an unknown item / empty table. Test never operates real GPIO.\n\nIf guesses are wrong, add more varied photos with the right category and train again."),
-    ("Sort with the camera", "Default outputs: a recognised Recycling item opens the servo bin. Waste or an unrecognised item flashes the LED and keeps the servo at rest. An empty table turns the LED off.\n\nEnable real GPIO once to operate the connected hardware. You can change the category mappings, pins and servo angles in GPIO outputs.")
+    ("Sort with the camera", "Default outputs: a recognised Recycling item opens the servo bin. Waste or an unrecognised item flashes the LED and keeps the servo at rest. An empty table turns the LED off.\n\nEnable real GPIO once to operate the connected hardware. You can change the category mappings, pins and servo angles in GPIO outputs."),
+    ("Set up the bin", "The lid presses a push button when it is shut, like the BNTS smart bin. The Pi uses it to find the closed position, then you choose how far the lid opens.\n\nDisconnect power before wiring. Keep fingers clear of the lid while it moves."),
 )
 
 
@@ -68,6 +75,9 @@ class App(tk.Tk):
         self.step = 0
         self.busy = False
         self.train_result = None
+        self.bin = None
+        self.retrain_needed = False
+        self.bin_closing = None   # a set-up lid still closing; its pins are not free yet
         self.camera_index = tk.StringVar(value="auto" if camera is None else str(camera))
         self.demo = demo
         self.cam = Camera(camera,demo)
@@ -120,10 +130,10 @@ class App(tk.Tk):
             bar.create_text(e.width-16,22,text="BNTS | teach - test - improve",fill="white",anchor="e")
         bar.bind("<Configure>",title)
         nav=tk.Frame(shell,bg=C["bg"]); nav.pack(fill="x",padx=10,pady=8)
-        self.nav=[]
-        for i,name in enumerate(STEPS):
-            b=self.button(nav,f"{i+1}. {name}",lambda i=i:self.show_step(i))
-            b.pack(side="left",padx=3); self.nav.append(b)
+        self.nav=[None]*len(STEPS)
+        for place,i in enumerate(NAV_ORDER):
+            b=self.button(nav,f"{place+1}. {STEPS[i]}",lambda i=i:self.show_step(i))
+            b.pack(side="left",padx=3); self.nav[i]=b
         self.button(nav,"New session",self.new_session).pack(side="right")
         self.button(nav,"Save",self.persist).pack(side="right",padx=5)
         self.button(nav,"GPIO outputs",self.show_outputs).pack(side="right",padx=5)
@@ -170,11 +180,12 @@ class App(tk.Tk):
 
     def show_step(self,step):
         if self.busy: return
-        if step>0 and not self.calibrated:
+        if 0<step<BIN and not self.calibrated:
             self.status.set("First photograph the empty mat, or check the saved table."); return
-        if step>2 and self.model is None:
+        if step in (3,LIVE) and self.model is None:
             self.status.set("Collect examples and train the model first."); return
         self.stop_outputs()
+        self.release_bin()
         self.step=step; self.gate.reset()
         if self.model is not None: self.model.reset_prediction()
         for i,b in enumerate(self.nav): b.configure(relief="sunken" if i==step else "raised")
@@ -185,6 +196,7 @@ class App(tk.Tk):
         if step==0: self.setup_controls()
         elif step==1: self.teach_controls()
         elif step==2: self.train_controls()
+        elif step==BIN: self.bin_controls()
         else: self.test_controls()
 
     def setup_controls(self):
@@ -202,37 +214,110 @@ class App(tk.Tk):
         self.button(self.panel,"Next: teach the camera →",lambda:self.show_step(1)).pack(fill="x",pady=6)
 
     def teach_controls(self):
-        ttk.Combobox(self.panel,textvariable=self.label_var,values=LABELS,state="readonly").pack(fill="x",pady=6)
-        self.text(self.panel,"Item name (optional):").pack(fill="x")
-        tk.Entry(self.panel,textvariable=self.group_var).pack(fill="x",pady=5)
-        self.text(self.panel,"For example: bottle, cup or wrapper. No name is needed to start; take 10 photos in each category.",wraplength=350).pack(fill="x")
-        self.button(self.panel,"Take photo  [Space]",self.capture).pack(fill="x",pady=8)
-        self.counts=self.text(self.panel,"",wraplength=350,bg="white",pady=8)
+        self.text(self.panel,"Choose a bin, then take photos:",pady=4).pack(fill="x")
+        self.cards={}
+        for label,name in enumerate(LABELS):
+            card=tk.Canvas(self.panel,width=340,height=106,bg=C["bg"],highlightthickness=0,cursor="hand2")
+            card.pack(fill="x",pady=3)
+            card.bind("<Button-1>",lambda e,name=name:self.choose_bin(name))
+            self.cards[label]=card
+        self.text(self.panel,"Item name (optional), for example bottle, cup or wrapper:",wraplength=350).pack(fill="x",pady=(6,0))
+        tk.Entry(self.panel,textvariable=self.group_var).pack(fill="x",pady=4)
+        self.take_button=self.button(self.panel,"",self.capture,font=(self.ui_font,12,"bold"))
+        self.take_button.pack(fill="x",pady=6)
+        self.counts=self.text(self.panel,"",wraplength=350,bg="white",pady=8,padx=8)
         self.counts.pack(fill="x")
+        row=tk.Frame(self.panel,bg=C["bg"]); row.pack(fill="x",pady=6)
+        self.button(row,"Undo last photo",self.undo).pack(side="left",fill="x",expand=True)
+        self.button(row,"Delete this named set",self.delete_group).pack(side="left",fill="x",expand=True,padx=(6,0))
+        self.next_button=self.button(self.panel,"Next: train →",lambda:self.show_step(2))
+        self.next_button.pack(fill="x",pady=6)
         self.update_counts()
-        self.button(self.panel,"Undo last photo",self.undo).pack(fill="x",pady=6)
-        self.button(self.panel,"Delete this named set",self.delete_group).pack(fill="x",pady=6)
-        self.button(self.panel,"Next: train →",lambda:self.show_step(2)).pack(fill="x",pady=6)
+
+    def choose_bin(self,name):
+        if name!=self.label_var.get():
+            self.label_var.set(name); self.group_var.set("")
+        self.update_counts()
 
     def update_counts(self):
         if self.step!=1: return
-        counts=Counter((s.label,s.group) for s in self.samples)
-        lines=[f"{name}: {sum(s.label==c for s in self.samples)}/{MIN_PHOTOS} photos" for c,name in enumerate(LABELS)]
-        lines += [f"{LABELS[c]} - {g}: {n}" for (c,g),n in counts.items()]
-        self.counts.configure(text="\n".join(lines[-12:]) or "No examples yet.")
+        chosen=LABELS.index(self.label_var.get())
+        totals=[sum(s.label==c for s in self.samples) for c in range(len(LABELS))]
+        self.thumb_images=[]
+        for label,name in enumerate(LABELS):
+            card=self.cards[label]; card.delete("all")
+            n=totals[label]; picked=label==chosen
+            card.create_rectangle(2,2,338,104,fill="white" if picked else "#DCDCDC",
+                                  outline=C["purple"] if picked else "#808080",width=3 if picked else 1)
+            card.create_text(12,16,anchor="w",text=("● " if picked else "○ ")+name,
+                             font=(self.ui_font,12,"bold"),fill=C["purple"] if picked else C["ink"])
+            done=n>=MIN_PHOTOS
+            count=f"{n} photos ✓" if done else f"{n} / {MIN_PHOTOS} photos"
+            card.create_text(328,16,anchor="e",text=count,fill=C["ok"] if done else C["ink"])
+            card.create_rectangle(12,30,328,42,fill="#FFFFFF",outline="#808080")
+            card.create_rectangle(12,30,12+316*min(n,MIN_PHOTOS)/MIN_PHOTOS,42,
+                                  fill=C["ok"] if done else C["teal"],outline="")
+            if n>MIN_PHOTOS:
+                card.create_text(170,36,text=f"+{n-MIN_PHOTOS} extra",fill="white",font=(self.ui_font,8,"bold"))
+            recent=[s for s in self.samples if s.label==label][-5:]
+            for k in range(5):
+                x=12+k*(THUMB_W+3); y=50
+                sample=recent[k] if k<len(recent) else None
+                if sample is not None and sample.thumb is not None:
+                    card.create_image(x,y,image=sample.thumb,anchor="nw")
+                    self.thumb_images.append(sample.thumb)
+                else:
+                    card.create_rectangle(x,y,x+THUMB_W,y+THUMB_H,fill="#F0F0F0",outline="#A0A0A0",dash=(2,2))
+                    card.create_text(x+THUMB_W/2,y+THUMB_H/2,text="✓" if sample is not None else "",fill="#808080")
+        name=LABELS[chosen]
+        left=MIN_PHOTOS-totals[chosen]
+        self.take_button.configure(text=f"Take a {name} photo  [Space]")
+        if left>0:
+            tip=f"{name}: {left} more photo{'s' if left!=1 else ''} to go. Turn or move the item each time."
+        elif requirements(self.samples):
+            other=LABELS[1-chosen]
+            tip=f"{name} has enough photos. Choose {other} next (click its box)."
+        else:
+            tip=("Both bins are ready to train. ✓\n\nWant it smarter? Keep adding photos: new items, "
+                 "other sides, different places on the table. Then train again.")
+        groups=Counter((s.label,s.group) for s in self.samples if s.label==chosen and s.group!=LABELS[s.label])
+        if groups:
+            tip+="\n\nNamed items: "+", ".join(f"{g} ({n})" for (c,g),n in groups.items())
+        self.counts.configure(text=tip)
+        ready=not requirements(self.samples)
+        self.next_button.configure(text="Next: train →" if ready else "Next: train (needs 10 of each) →",
+                                   default="active" if ready else "normal")
 
     def train_controls(self):
         missing=requirements(self.samples)
-        self.text(self.panel,"\n".join(missing) if missing else f"{len(self.samples)} examples ready for training.",wraplength=350,pady=8).pack(fill="x")
-        self.train_button=self.button(self.panel,"Train and quiz",self.train,state="disabled" if missing else "normal")
+        totals=[sum(s.label==c for s in self.samples) for c in range(len(LABELS))]
+        self.text(self.panel,"\n".join(missing) if missing else
+                  "Photos ready: "+", ".join(f"{n} {name}" for name,n in zip(LABELS,totals)),wraplength=350,pady=8).pack(fill="x")
+        self.train_button=self.button(self.panel,"Train again" if self.quiz else "Train and quiz",self.train,state="disabled" if missing else "normal")
         self.train_button.pack(fill="x",pady=6)
-        report=[]
-        for r in self.quiz:
-            report.append(f"{r['group']}: {r['correct']}/{r['total']} correct bin, {r['withheld']} withheld, {r['wrong_bin']} wrong bin")
-        if report:
-            self.text(self.panel,"Photo quiz (as in ML Camera; not a fresh-item test):\n\n"+"\n".join(report),wraplength=350,bg="white",pady=8).pack(fill="x",pady=6)
-            self.button(self.panel,"Start sorting →",lambda:self.show_step(4)).pack(fill="x",pady=6)
-            self.button(self.panel,"Optional: fresh-item test",lambda:self.show_step(3)).pack(fill="x",pady=6)
+        if self.quiz:
+            self.text(self.panel,"Photo quiz (practice, not a fresh-item test):",pady=4).pack(fill="x")
+            for r in self.quiz:
+                box=tk.Frame(self.panel,bg="white",bd=1,relief="sunken"); box.pack(fill="x",pady=3)
+                share=r['correct']/max(r['total'],1)
+                self.text(box,f"{r['group']}: {r['correct']} of {r['total']} photos guessed right",bg="white",padx=6).pack(fill="x")
+                bar=tk.Canvas(box,height=10,bg="white",highlightthickness=0); bar.pack(fill="x",padx=6)
+                bar.bind("<Configure>",lambda e,b=bar,share=share:(b.delete("all"),
+                         b.create_rectangle(0,0,e.width*share,10,fill=C["ok"] if share>=.9 else C["teal"],outline="")))
+                tip="More photos would help this bin." if share<.9 else "Looking good."
+                self.text(box,tip,bg="white",fg=C["muted"],padx=6).pack(fill="x")
+                self.button(box,f"+ Add more {r['group']} photos",lambda name=r['group']:self.more_photos(name)).pack(fill="x",padx=6,pady=4)
+            if self.model is not None:
+                self.button(self.panel,"Next: set up the bin →",lambda:self.show_step(BIN)).pack(fill="x",pady=6)
+                self.button(self.panel,"Start sorting (Live) →",lambda:self.show_step(LIVE)).pack(fill="x",pady=3)
+                self.button(self.panel,"Optional: fresh-item test",lambda:self.show_step(3)).pack(fill="x",pady=3)
+        else:
+            self.button(self.panel,"+ Add more photos first",lambda:self.show_step(1)).pack(fill="x",pady=3)
+
+    def more_photos(self,name):
+        self.label_var.set(name); self.group_var.set("")
+        self.show_step(1)
+        self.status.set(f"Add more {name} photos. Afterwards, train again.")
 
     def test_controls(self):
         self.text(self.panel,"Local rules: "+self.rule_var.get(),wraplength=350,bg=C["warn"],pady=6).pack(fill="x")
@@ -243,8 +328,177 @@ class App(tk.Tk):
         self.test_report.pack(fill="x",pady=8)
         self.update_report()
         self.button(self.panel,"Clear test results",self.clear_tests).pack(fill="x",pady=3)
-        self.button(self.panel,"Add better training examples",lambda:self.show_step(1)).pack(fill="x",pady=6)
+        self.button(self.panel,"+ Add more photos",lambda:self.show_step(1)).pack(fill="x",pady=6)
         self.text(self.panel,"Similarity votes are not an accuracy percentage. Only the fresh tests above show how this model behaved. This is a teaching model; check uncertain items against local recycling guidance.",wraplength=350,pady=6).pack(fill="x")
+
+    # ---------------- Bin set-up: the hardware calibration ----------------
+    def servo_rule(self):
+        rules=[r for r in self.outputs.config.rules if r.kind=="servo"]
+        return rules[0] if rules else OutputRule(1,"servo",18,90,0)
+
+    def bin_controls(self):
+        rule=self.servo_rule()
+        self.bin_vars={"servo":tk.StringVar(value=str(rule.pin)),
+                       "button":tk.StringVar(value=str(rule.button_pin or 23)),
+                       "closes":tk.StringVar(value="up" if rule.rest_angle>rule.active_angle else "down"),
+                       "label":tk.StringVar(value=LABELS[rule.label])}
+        if self.demo:
+            self.text(self.panel,"DEMO: a pretend lid. Its button presses at 120°, so choose 'towards 180°'.",
+                      bg=C["warn"],wraplength=350,pady=4).pack(fill="x")
+        form=tk.Frame(self.panel,bg=C["bg"]); form.pack(fill="x",pady=4)
+        self.text(form,"Lid opens for:").grid(row=0,column=0,sticky="w")
+        ttk.Combobox(form,textvariable=self.bin_vars["label"],values=LABELS,state="readonly",width=10).grid(row=0,column=1,sticky="w",pady=2)
+        self.text(form,"Servo signal GPIO:").grid(row=1,column=0,sticky="w")
+        ttk.Combobox(form,textvariable=self.bin_vars["servo"],values=tuple(HEADER_PINS),width=5).grid(row=1,column=1,sticky="w",pady=2)
+        self.text(form,"Closed button GPIO:").grid(row=2,column=0,sticky="w")
+        ttk.Combobox(form,textvariable=self.bin_vars["button"],values=tuple(HEADER_PINS),width=5).grid(row=2,column=1,sticky="w",pady=2)
+        self.text(form,"To close, the servo turns:").grid(row=3,column=0,sticky="w")
+        turn=tk.Frame(form,bg=C["bg"]); turn.grid(row=3,column=1,sticky="w")
+        for value,text in (("up","towards 180°"),("down","towards 0°")):
+            tk.Radiobutton(turn,text=text,value=value,variable=self.bin_vars["closes"],bg=C["bg"]).pack(anchor="w")
+        self.bin_dial=tk.Canvas(self.panel,width=340,height=140,bg="white",highlightthickness=1,highlightbackground="#808080")
+        self.bin_dial.pack(fill="x",pady=4)
+        self.bin_note=self.text(self.panel,"",wraplength=350,bg="white",pady=6,padx=6)
+        self.bin_note.pack(fill="x")
+        self.bin_buttons={}
+        def add(key,text,command,parent=None,**pack):
+            b=self.button(parent or self.panel,text,command); b.pack(**(pack or {"fill":"x","pady":3}))
+            self.bin_buttons[key]=b
+        add("find","1. Find the closed position",self.bin_find)
+        row=tk.Frame(self.panel,bg=C["bg"]); row.pack(fill="x",pady=3)
+        add("more","2. Open 5° more",lambda:self.bin_open(1),row,side="left",fill="x",expand=True)
+        add("less","5° less",lambda:self.bin_open(-1),row,side="left",padx=(6,0))
+        add("test","3. Test: open, then close",self.bin_test)
+        add("save","4. Save the bin settings",self.bin_save)
+        add("stop","Stop and close the lid",self.release_bin)
+        self.bin_wiring=self.text(self.panel,"",bg=C["warn"],wraplength=350,pady=6,padx=6)
+        self.bin_wiring.pack(fill="x",pady=4)
+        for var in ("servo","button"):
+            self.bin_vars[var].trace_add("write",lambda *_:self.show_bin_wiring())
+        self.show_bin_wiring()
+        self.draw_bin()
+
+    def show_bin_wiring(self):
+        def physical(var):
+            try: return f"physical pin {HEADER_PINS[int(self.bin_vars[var].get())]}"
+            except (ValueError,KeyError): return "choose a GPIO from 2 to 27"
+        self.bin_wiring.configure(text=(
+            f"Wiring (power off first):\n• Servo signal → GPIO{self.bin_vars['servo'].get()} ({physical('servo')}). "
+            "Servo power from its own 5 V supply; join its GND to the Pi's GND.\n"
+            f"• Push button: one leg → GPIO{self.bin_vars['button'].get()} ({physical('button')}), "
+            "other leg → GND (for example physical pin 14). No resistor needed. Never wire the button to 5 V.\n"
+            "• Fix the button where the shut lid presses it."))
+
+    def bin_settings(self):
+        try:
+            servo,button=int(self.bin_vars["servo"].get()),int(self.bin_vars["button"].get())
+            label=LABELS.index(self.bin_vars["label"].get())
+        except ValueError:
+            raise ValueError("Choose GPIO numbers for the servo and the button")
+        # Check the pins against the other output before touching hardware.
+        other=[r for r in self.outputs.config.rules if r.label!=label]
+        trial=OutputRule(label,"servo",servo,0.,90.,button)
+        validate_config(OutputConfig(other+[trial]))
+        return servo,button,label
+
+    def bin_find(self):
+        if self.bin is None:
+            try:
+                servo,button,_=self.bin_settings()
+            except ValueError as e:
+                self.status.set(f"Check the bin settings: {e}"); return
+            self.stop_outputs()
+            if self.lids_busy():
+                self.status.set("Wait a moment: the lid is still closing."); return
+            rule=self.servo_rule()
+            closes_up=self.bin_vars["closes"].get()=="up"
+            start=rule.active_angle if rule.button_pin and (rule.rest_angle>rule.active_angle)==closes_up else 90
+            try:
+                factory=SimulatedBin() if self.demo else None
+                if factory is None:
+                    import gpiozero as factory
+                self.bin=BinSetup(factory,servo,button,closes_up,start)
+            except Exception as e:
+                self.bin=None
+                self.status.set(f"The servo or button could not start: {e}"); return
+        if self.bin.find_closed():
+            self.status.set("Finding the closed position: the lid closes slowly until it presses the button…")
+        else:
+            self.status.set(self.bin.lid.fault)
+        self.draw_bin()
+
+    def bin_open(self,steps):
+        if self.bin is None or self.bin.closed_angle is None:
+            self.status.set("First press 1. Find the closed position."); return
+        self.bin.open_by(steps)
+        self.status.set(f"Lid open at {self.bin.open_angle:g}°. Keep pressing Open 5° more until it opens far enough.")
+        self.draw_bin()
+
+    def bin_test(self):
+        if self.bin is None or not self.bin.test_cycle():
+            self.status.set("Find the closed position and open the lid first."); return
+        self.status.set("Testing: the lid stays open for 2 seconds, then closes until the button presses.")
+
+    def bin_save(self):
+        if self.bin is None or not self.bin.ready:
+            self.status.set("Find the closed position and set how far it opens first."); return
+        label=LABELS.index(self.bin_vars["label"].get())
+        rules=[r for r in self.outputs.config.rules if r.label!=label]+[self.bin.rule(label)]
+        config=OutputConfig(sorted(rules,key=lambda r:r.label))
+        closed,opened,button=self.bin.closed_angle,self.bin.open_angle,self.bin.button_pin
+        self.release_bin()
+        if self.apply_output_config(config):
+            self.show_step(LIVE if self.model is not None else BIN)
+            self.status.set(f"Bin saved: closed at {closed:g}°, open at {opened:g}°, button on GPIO{button}. "
+                            +("Start sorting: press Enable real GPIO." if self.model is not None else "Train the camera, then sort in Live."))
+
+    def lids_busy(self):
+        if self.bin_closing is not None and not self.bin_closing.busy: self.bin_closing=None
+        return self.bin_closing is not None or self.outputs.lid_closing
+
+    def release_bin(self):
+        if self.bin is not None:
+            self.bin_closing=self.bin.release()
+            self.bin=None
+            if self.step==BIN and hasattr(self,"bin_dial"): self.draw_bin()
+
+    def draw_bin(self):
+        if self.step!=BIN or not hasattr(self,"bin_dial"): return
+        d=self.bin_dial; d.delete("all")
+        w=max(int(d.winfo_width()),340); cx,cy,r=w//2,124,100
+        d.create_arc(cx-r,cy-r,cx+r,cy+r,start=0,extent=180,style="arc",outline="#A0A0A0",width=2)
+        for a in range(0,181,30):
+            d.create_text(cx+(r-14)*math.cos(math.radians(a)),cy-6-(r-18)*math.sin(math.radians(a)),text=f"{a}",fill="#808080",font=(self.ui_font,7))
+        b=self.bin
+        def ray(angle,colour,width):
+            d.create_line(cx,cy,cx+r*math.cos(math.radians(angle)),cy-r*math.sin(math.radians(angle)),fill=colour,width=width)
+        if b is not None and b.closed_angle is not None:
+            ray(b.closed_angle,C["purple"],3)
+            d.create_text(10,14,anchor="w",text=f"— closed {b.closed_angle:g}°",fill=C["purple"],font=(self.ui_font,9,"bold"))
+        if b is not None and b.open_angle is not None:
+            ray(b.open_angle,C["ok"],3)
+            d.create_text(10,32,anchor="w",text=f"— open {b.open_angle:g}°",fill=C["ok"],font=(self.ui_font,9,"bold"))
+        if b is not None:
+            ray(b.lid.position,"#000000",4)
+            d.create_oval(cx-6,cy-6,cx+6,cy+6,fill="#000000")
+            pressed=b.pressed
+            d.create_oval(10,cy-14,26,cy+2,fill=C["ok"] if pressed else "white",outline="#000000")
+            d.create_text(32,cy-6,anchor="w",text="Button pressed" if pressed else "Button up",font=(self.ui_font,8))
+            d.create_text(w-10,14,anchor="e",text=f"Servo {b.lid.position:g}° · {b.lid.state}",font=(self.ui_font,9))
+        else:
+            d.create_text(cx,cy-40,text="Servo off. Press 1. Find the closed position.",fill="#808080")
+        # Explain the next thing to do.
+        if b is None: note="Wire the servo and button, choose their pins, then press 1."
+        elif b.homing: note="Closing slowly… it stops when the lid presses the button."
+        elif b.lid.fault: note="⚠ "+b.lid.fault
+        elif b.closed_angle is None: note="The button didn't press. Check its wires and which way the lid closes, then press 1 again."
+        elif b.open_angle is None: note=f"✓ Closed at {b.closed_angle:g}°. Now press 2. Open 5° more until the lid opens far enough."
+        else: note=f"Opens to {b.open_angle:g}° ({abs(b.closed_angle-b.open_angle):g}° from closed). Try 3. Test, then 4. Save."
+        self.bin_note.configure(text=note)
+        ready=b is not None and b.ready
+        for key,on in (("more",b is not None and b.closed_angle is not None),("less",b is not None and b.open_angle is not None),
+                       ("test",ready),("save",ready),("stop",b is not None)):
+            self.bin_buttons[key].configure(state="normal" if on else "disabled")
 
     def fresh(self):
         if self.frame is None or time.monotonic()-self.frame_time>1:
@@ -309,8 +563,9 @@ class App(tk.Tk):
         now=time.monotonic()
         if now-self.last_capture<.35: return
         self.last_capture=now
-        self.samples.append(Sample(o.feature.copy(),label,name))
-        self.invalidate(); self.update_counts(); saved=self.persist()
+        self.samples.append(Sample(o.feature.copy(),label,name,self.thumbnail(o.contour)))
+        self.retrain_needed=self.retrain_needed or self.model is not None
+        self.invalidate(); saved=self.persist()
         n=sum(s.label==label and s.group==name for s in self.samples)
         if saved: self.status.set(f"{name}: {n} photos. Turn or move it before the next photo.")
         count=sum(s.label==label for s in self.samples)
@@ -318,7 +573,26 @@ class App(tk.Tk):
             if label==0 and sum(s.label==1 for s in self.samples)<MIN_PHOTOS:
                 self.label_var.set(LABELS[1]); self.group_var.set("")
                 self.status.set("Waste photos done. Now take 10 Recycling photos.")
-            elif not requirements(self.samples): self.show_step(2)
+            elif not requirements(self.samples):
+                self.status.set("Both bins have 10 photos. Press Next: train, or keep adding photos.")
+        elif self.retrain_needed and saved:
+            self.status.set(f"{name}: {n} photos. Train again to use the new photos.")
+        self.update_counts()
+
+    def thumbnail(self,contour):
+        """A small picture of the item for the Teach screen (never saved to disk)."""
+        try:
+            x,y,w,h=(2*v for v in cv2.boundingRect(contour))
+            pad=max(w,h)//6
+            crop=self.frame[max(0,y-pad):y+h+pad,max(0,x-pad):x+w+pad]
+            scale=min(THUMB_W/crop.shape[1],THUMB_H/crop.shape[0])
+            small=cv2.resize(crop,(max(1,int(crop.shape[1]*scale)),max(1,int(crop.shape[0]*scale))),interpolation=cv2.INTER_AREA)
+            tile=np.full((THUMB_H,THUMB_W,3),40,np.uint8)
+            top,left=(THUMB_H-small.shape[0])//2,(THUMB_W-small.shape[1])//2
+            tile[top:top+small.shape[0],left:left+small.shape[1]]=small
+            return ImageTk.PhotoImage(Image.fromarray(cv2.cvtColor(tile,cv2.COLOR_BGR2RGB)))
+        except (cv2.error,ValueError,ZeroDivisionError,tk.TclError):
+            return None
 
     def undo(self):
         if self.samples:
@@ -385,7 +659,7 @@ class App(tk.Tk):
             self.status.set("Wait for training to finish before starting a new session."); return
         self.stop_outputs()
         if not messagebox.askyesno("New session", "Delete this session's saved examples and test results? This cannot be undone."): return
-        self.samples=[]; self.background=None; self.model=None; self.quiz=[]; self.test_records=[]
+        self.samples=[]; self.background=None; self.model=None; self.quiz=[]; self.test_records=[]; self.retrain_needed=False
         self.calibrated=False; self.bg_frames=None; self.gate.reset(); self.previous=None
         try:
             for name in ("training.npz","fresh-tests.json","project.json"):
@@ -401,9 +675,13 @@ class App(tk.Tk):
     def tick(self):
         if self.train_result is not None:
             self.model,self.quiz,error=self.train_result
+            if not error: self.retrain_needed=False
             self.train_result=None; self.busy=False; self.gate.reset(); self.test_records=[]
-            self.show_step(2 if error else 4)
-            self.status.set(f"Training failed: {error}" if error else "Training finished. Sorting is ready; enable real GPIO to operate the bin and LED.")
+            needs_bin=not self.demo and any(r.kind=="servo" and not r.button_pin for r in self.outputs.config.rules)
+            self.show_step(2 if error else BIN if needs_bin else LIVE)
+            self.status.set(f"Training failed: {error}" if error else
+                            "Training finished. Next: set up the bin's servo and closed button." if needs_bin else
+                            "Training finished. Sorting is ready; enable real GPIO to operate the bin and LED.")
         latest,error=self.cam.read()
         now=time.monotonic()
         if latest is None or now-latest[1]>1:
@@ -460,6 +738,7 @@ class App(tk.Tk):
             self.photo=ImageTk.PhotoImage(image)
             self.preview.configure(image=self.photo)
         self.refresh_outputs()
+        if self.bin is not None: self.draw_bin()
         self.after(120,self.tick)
 
     def show_outputs(self):
@@ -498,6 +777,8 @@ class App(tk.Tk):
         if not self.fresh(): return
         if self.output_load_error:
             self.status.set("Correct and save the GPIO mappings before enabling hardware."); return
+        if self.lids_busy():
+            self.status.set("Wait a moment: the lid is still closing."); return
         self.gate.reset()
         self.model.reset_prediction()
         if self.outputs.arm():
@@ -518,7 +799,10 @@ class App(tk.Tk):
 
     def close(self):
         try:
+            self.release_bin()
             self.outputs.close()
+            lid=self.bin_closing
+            if lid is not None and not lid.join(5): lid.stop_now()
         finally:
             self.cam.close()
             self.destroy()

@@ -1,3 +1,16 @@
+# Version 0.4.0 validation
+
+**53 tests passed** (12 new). New tests drive the servo with fake, gpiozero mock and
+pretend-lid hardware: opening at once, closing 1° at a time, stopping when the
+button presses, going limp, the fallback when the button never presses, a stuck
+button, a shut lid that doesn't move on start-up, closing before pins are freed,
+re-arming only after the lid has closed, a servo error stopping all outputs, the
+5° calibration steps and saving them, a button pin clashing with the servo, and
+taking extra photos past 10 from Teach and from the quiz.
+
+Screens checked at 1024×640 with the demo: Teach (photo boxes, "+3 extra") and
+Set up bin (dial, buttons). Not verified here: a real servo, button and lid.
+
 # Version 0.3.1 validation (new Raspberry Pi 5)
 
 **41 tests passed, none failed or skipped**, with the library versions Raspberry Pi

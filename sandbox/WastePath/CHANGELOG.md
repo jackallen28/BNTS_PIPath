@@ -1,3 +1,20 @@
+# 0.4.0 — more photos, a calmer servo and bin set-up
+
+- **Servo like the BNTS Arduino bin:** opens at once and stays open at least 2 s;
+  closes by sweeping 1° every 15 ms until the closed push button presses, holds
+  0.3 s, then goes limp. Without a button it sweeps to the closed angle. Falls back
+  to the saved angle (with a ⚠) if the button never presses; warns if it stays
+  pressed after opening. Stopping GPIO closes the lid before freeing the pins.
+- **4. Set up bin:** a hardware calibration after the photos. It finds the closed
+  angle with the button, then opens the lid 5° at a time, tests it and saves both
+  angles and the button pin. A live dial shows the servo and the button. The demo
+  has a pretend lid.
+- **Teach screen:** a box per bin with a progress bar and the last five photos.
+  Photos can go past 10 ("+3 extra"); it no longer jumps to Train at 10. The Train
+  screen shows a quiz bar per bin with **+ Add more … photos**, and reminds you to
+  train again after adding photos.
+- GPIO outputs: "Closed button GPIO" field; open/closed angle labels.
+
 # 0.3.1 — ready for a new Raspberry Pi 5
 
 - Find the USB webcam by itself. On a Pi 5, `/dev/video0` can belong to the ribbon

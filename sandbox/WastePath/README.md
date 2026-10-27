@@ -1,4 +1,4 @@
-# WastePath — TEST sandbox, version 0.3.1
+# WastePath — TEST sandbox, version 0.4.0
 
 A standalone PiPath-style waste/recycling camera workshop, based on your working
 **ML Camera** program. This version restores its recognition method and removes
@@ -60,27 +60,31 @@ and angles are kept in the separate `outputs.json` file.
 1. **Set up:** aim at a plain table with steady lighting. Clear the table, including
    your hands, then press **Photograph empty table**. It averages ten camera frames,
    just like the original. Keep the camera in that position.
-2. **Teach Waste:** take **10 photos**. Move or turn the item between photos and
-   take your hand away. Names are optional. You can include different waste items
-   if they belong in your local waste bin.
-3. **Teach Recycling:** the category advances automatically after the first ten
-   photos. Take **10 recycling photos** in the same way. There is no humans, hands
-   or background training class. More varied item photos can be added later.
+2. **Teach:** two boxes show each bin's photos: a progress bar to 10 and the last
+   five photos taken. Click a box to choose the bin. Take **at least 10 Waste
+   photos**, then **10 Recycling photos** (it moves on to Recycling by itself after
+   the first ten). Move or turn the item between photos and take your hand away.
+   Names are optional.
+3. **More photos, any time:** keep pressing **Take photo** past 10 (the bar shows
+   "+3 extra"), or use **+ Add more … photos** under the quiz results on the Train
+   screen. New photos need **Train again** before Live uses them. The small photos
+   on screen are only kept while WastePath is open; only the measurements are saved.
 4. **Train:** press **Train and quiz**. It uses the original colour/shape scaling,
-   five-nearest-neighbour votes, photo quiz and unknown-object distance limit.
-   Training takes you straight to **Live**, ready to sort.
-5. **Live:** simulation shows what the outputs would do. On the Pi, configure the
-   pins in **GPIO outputs**, then press **Enable real GPIO** once for this session.
+   five-nearest-neighbour votes, photo quiz and unknown-object distance limit. Each
+   bin's quiz result has a bar; under 90% suggests adding more photos of that bin.
+5. **Set up bin** (the hardware calibration, see below), the first time only.
+6. **Live:** simulation shows what the outputs would do. Press **Enable real GPIO**
+   once for this session.
 
 The default behaviour is:
 
 | Camera result | Servo / bin | LED |
 | --- | --- | --- |
-| Recognised Recycling | Open, at configured active angle | Off |
-| Recognised Waste | Rest / closed angle | Flashes |
-| Unrecognised or uncertain item | Rest / closed angle | Flashes |
-| Empty table | Rest / closed angle | Off |
-| Camera disconnected or stale | Rest-angle command | Off |
+| Recognised Recycling | Opens at once to the open angle | Off |
+| Recognised Waste | Closes slowly until the button presses | Flashes |
+| Unrecognised or uncertain item | Closes slowly until the button presses | Flashes |
+| Empty table | Closes slowly until the button presses | Off |
+| Camera disconnected or stale | Closes, then GPIO stops | Off |
 
 A new accepted label must remain consistent for half a second before operating
 its output. Recognition is smoothed across frames as in ML Camera; the removed
@@ -97,33 +101,60 @@ If it picks up shadows, increase it. The default is 22, as in your original app.
 Use **Computer view** to see the changed pixels. The whole 4:3 camera image is used;
 widescreen input is cropped to 4:3 before resizing, so shapes are not stretched.
 
-## GPIO settings and wiring
+## The servo and the closed button
+
+The servo works like the BNTS smart bin's Arduino program:
+
+- **Open:** the servo goes straight to the open angle and holds it. The lid stays
+  open for at least 2 seconds, so it doesn't flap.
+- **Close:** it sweeps **1° every 15 ms** towards closed, checking the closed button
+  after each step. When the shut lid presses the button it holds for 0.3 s, then
+  **goes limp** (no pulses), so it doesn't buzz or push against the lid.
+- **No press:** it stops 15° past the saved closed angle, rests at the saved angle
+  and shows ⚠ in Live (like the Arduino's fallback angle). Check the button.
+- **Stuck:** if the button is still pressed 0.4 s after opening, Live shows ⚠.
+- **Start-up:** when you enable real GPIO, a shut lid stays still. Otherwise it
+  homes from the open angle, as the Arduino does at power-up.
+- **Stop GPIO**, changing screens, the watchdog and quitting all close the lid
+  first, then free the pins.
+
+Without a button, the servo still sweeps slowly to the closed angle and goes limp.
+
+### Wiring (power off first)
+
+- **LED:** BCM17 (**physical pin 11**) → LED long leg; short leg → **220–330 Ω
+  resistor** → GND (physical pin 6).
+- **Servo signal:** BCM18 (**physical pin 12**). Power the servo from its own 5 V
+  supply and join its GND to the Pi's GND. Never power it from a GPIO pin.
+- **Closed button:** one leg → BCM23 (**physical pin 16**), the other leg → GND
+  (physical pin 14). No resistor: the Pi's own pull-up is used. **Never connect the
+  button to 5 V** (the Arduino bin's 5 V + 10k wiring would damage a Pi pin). Fix it
+  where the shut lid presses it.
+
+### 4. Set up bin (hardware calibration)
+
+1. Choose which bin the lid opens for, the servo and button GPIO numbers, and which
+   way the servo turns to close (the Arduino bin closes towards 180°).
+2. **Find the closed position:** the lid sweeps closed until it presses the button.
+   The dial shows the servo angle and the button.
+3. **Open 5° more:** press until the lid opens far enough (**5° less** goes back).
+4. **Test:** opens, waits 2 s, then closes until the button presses.
+5. **Save the bin settings.** The angles and button are kept in `outputs.json`.
+
+In `--demo` the bin step uses a pretend lid whose button presses at 120°.
+**GPIO outputs** still lets you type angles and pins yourself, including the button
+("none" for no button).
 
 Choose Off, LED or Servo separately for Waste and Recycling. Each enabled output
-needs a different **BCM GPIO number**, not a physical header pin number. Servo
-active/rest angles can be set from 0° to 180°. To make a waste bin instead, assign
-the servo to Waste and LED to Recycling. Unrecognised items activate whichever LED
-outputs are configured; they never activate a servo. Keep an LED configured if you
-want the wrong-item indicator.
+and button needs a different **BCM GPIO number**, not a physical pin number. To
+make a waste bin instead, give the servo to Waste and the LED to Recycling.
+Unrecognised items flash the LEDs; they never open a servo.
 
-Default wiring, with power disconnected:
-
-- LED: BCM17 (**physical pin 11**) → LED anode; cathode → **220–330 Ω resistor** →
-  Pi GND (for example physical pin 6).
-- Servo signal: BCM18 (**physical pin 12**). Power it from a suitable external
-  regulated supply, normally 5 V, according to its specification. Join the servo
-  ground, supply ground and Pi ground. Do not power a motor from a GPIO signal pin.
-- Set active/rest angles to match your mechanism before attaching a lid or gate.
-  The driver uses 1–2 ms pulses. Actual travel depends on the servo.
-
-The app starts with GPIO disabled. **Stop GPIO**, changing screens/settings,
-changing training, reset and exit release hardware. An independent watchdog stops
-outputs if decision updates stop for 1.5 seconds; GPIO errors also stop outputs
-until you explicitly enable them again. A rest command is not position feedback
-and cannot guarantee that an unpowered or faulty servo closed the bin.
-
-Use a supervised lightweight classroom mechanism and keep fingers clear. This is
-not a person detector or a safety interlock. See [HARDWARE-CHECKLIST.md](HARDWARE-CHECKLIST.md).
+The app starts with GPIO disabled. An independent watchdog stops outputs if
+decision updates stop for 1.5 seconds; GPIO errors also stop outputs until you
+enable them again. Use a supervised lightweight classroom mechanism and keep
+fingers clear. This is not a person detector or a safety interlock. See
+[HARDWARE-CHECKLIST.md](HARDWARE-CHECKLIST.md).
 
 ## Saved data and later PiPath integration
 

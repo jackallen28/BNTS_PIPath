@@ -7,14 +7,16 @@ import time
 import unittest
 import warnings
 from wastepath.outputs import (
-    Controller, OutputRule, OutputConfig, default_config, validate_config,
+    Controller, OutputRule, OutputConfig, ServoDriver, default_config, validate_config,
     save_config, load_config,
 )
+from wastepath.bin_setup import BinSetup, SimulatedBin
 
 
 class FakeDevice:
     def __init__(self, pin, **kwargs):
         self.pin = pin
+        self.last = None
         self.kwargs = kwargs
         self.value = 0
         self._angle = kwargs.get("initial_angle")
@@ -49,6 +51,8 @@ class FakeDevice:
         if self.fail_on:
             raise OSError("lost PWM")
         self._angle = value
+        if value is not None:
+            self.last = value
         self.events.append(value)
 
     def close(self):
@@ -56,10 +60,33 @@ class FakeDevice:
         self.events.append("close")
 
 
+class FakeButton:
+    """Pressed when `pressed(servo_angle)` says the lid is shut."""
+    def __init__(self, factory, pin):
+        self.factory, self.pin, self.closed = factory, pin, False
+
+    @property
+    def value(self):
+        servo = self.factory.servo
+        angle = servo.last if servo is not None else None
+        return int(self.factory.pressed(angle))
+
+    def close(self):
+        self.closed = True
+
+
 class FakeFactory:
-    def __init__(self):
+    def __init__(self, pressed=lambda angle: False):
         self.devices = {}
         self.fail_servo = False
+        self.pressed = pressed
+        self.servo = None
+
+    def InputDevice(self, pin, **kwargs):
+        self.button_kwargs = kwargs
+        device = FakeButton(self, pin)
+        self.devices[pin] = device
+        return device
 
     def LED(self, pin, **kwargs):
         device = FakeDevice(pin, **kwargs)
@@ -71,7 +98,24 @@ class FakeFactory:
             raise OSError("PWM unavailable")
         device = FakeDevice(pin, **kwargs)
         self.devices[pin] = device
+        self.servo = device
         return device
+
+
+def fast_servo(test):
+    """Run the lid's timing quickly, so a full sweep takes a fraction of a second."""
+    for name, value in (("STEP_SECONDS", .001), ("SETTLE_SECONDS", .01),
+                        ("RELEASE_SECONDS", .02), ("HOLD_OPEN_SECONDS", 0)):
+        old = getattr(ServoDriver, name)
+        setattr(ServoDriver, name, value)
+        test.addCleanup(setattr, ServoDriver, name, old)
+
+
+def wait_for(condition, seconds=3):
+    deadline = time.monotonic() + seconds
+    while not condition() and time.monotonic() < deadline:
+        time.sleep(.005)
+    return condition()
 
 
 class ConfigTests(unittest.TestCase):
@@ -104,11 +148,25 @@ class ConfigTests(unittest.TestCase):
             OutputConfig([OutputRule(1, "servo", 18, rest_angle=-1)]),
             OutputConfig([OutputRule(1, "servo", 18, active_angle=181)]),
             OutputConfig([OutputRule(1, "servo", 18, active_angle="90")]),
+            OutputConfig([OutputRule(1, "servo", 18, 90, 90)]),
+            OutputConfig([OutputRule(1, "servo", 18, button_pin=18)]),
+            OutputConfig([OutputRule(1, "servo", 18, button_pin=1)]),
+            OutputConfig([OutputRule(1, "servo", 18, button_pin=True)]),
+            OutputConfig([OutputRule(0, "led", 23), OutputRule(1, "servo", 18, button_pin=23)]),
         ]
         for config in bad:
             with self.subTest(config=config), self.assertRaises(ValueError):
                 validate_config(config)
         validate_config(OutputConfig([OutputRule(0, "off", 17), OutputRule(1, "servo", 17)]))
+
+    def test_closed_button_round_trips_and_older_files_still_load(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder)/"gpio.json"
+            config = OutputConfig([OutputRule(0, "led", 17), OutputRule(1, "servo", 18, 70, 125, 23)])
+            save_config(path, config)
+            self.assertEqual(load_config(path).rules[1].button_pin, 23)
+            path.write_text('{"version":1,"rules":[{"label":1,"kind":"servo","pin":18,"active_angle":90,"rest_angle":0}]}')
+            self.assertEqual(load_config(path).rules[0].button_pin, 0)
 
     def test_loading_rejects_unsupported_file_and_does_not_modify_it(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -121,10 +179,14 @@ class ConfigTests(unittest.TestCase):
 
 class ControllerTests(unittest.TestCase):
     def setUp(self):
+        fast_servo(self)
         self.now = 0.
         self.factory = FakeFactory()
         self.controller = Controller(factory=self.factory, clock=lambda: self.now)
         self.addCleanup(self.controller.close)
+
+    def closed(self, lid):
+        self.assertTrue(wait_for(lambda: lid.state == "closed"), lid.state)
 
     def test_simulation_never_allocates_gpio_and_returns_to_neutral(self):
         c = self.controller
@@ -139,29 +201,88 @@ class ControllerTests(unittest.TestCase):
         self.assertIn("servo BCM18 0°", c.state_text)
         self.assertEqual(self.factory.devices, {})
 
-    def test_real_rules_switch_and_repeated_updates_do_not_rewrite_servo(self):
+    def test_servo_opens_at_once_then_sweeps_closed_one_degree_at_a_time_and_goes_limp(self):
         c = self.controller
         c.update(1)  # Existing simulated prediction must not activate on arm.
         self.assertTrue(c.arm())
-        led, servo = self.factory.devices[17], self.factory.devices[18]
-        self.assertEqual(led.value, 0)
-        self.assertEqual(servo.angle, 0)
+        led, servo, lid = self.factory.devices[17], self.factory.devices[18], c._devices[1]
+        self.assertIsNone(servo.kwargs['initial_angle'])
         self.assertEqual(servo.kwargs['min_pulse_width'], .001)
         self.assertEqual(servo.kwargs['max_pulse_width'], .002)
+        self.closed(lid)                      # no button: rests at the closed angle...
+        self.assertEqual(servo.events[:1], [0])
+        self.assertIsNone(servo.angle)        # ...then goes limp, no buzzing
+        self.assertEqual(led.value, 0)
         c.update(1)
-        self.assertEqual(servo.angle, 90)
+        self.assertEqual(servo.angle, 90)     # opens straight away
         before = list(servo.events)
         for _ in range(20): c.update(1)
         self.assertEqual(servo.events, before)
+        self.assertIn("servo BCM18 open 90°", c.state_text)
         c.update(0)
-        self.assertEqual(servo.angle, 0)
         self.assertEqual(led.value, 1)
+        self.closed(lid)
+        sweep = [e for e in servo.events[len(before):] if e is not None]
+        self.assertEqual(sweep, [float(a) for a in range(90, -1, -1)])
+        self.assertIsNone(servo.events[-1])
         c.neutral()
         self.assertEqual(led.value, 0)
-        self.assertEqual(servo.angle, 0)
         c.disarm()
         self.assertFalse(c.armed)
-        self.assertTrue(led.closed and servo.closed)
+        self.assertTrue(led.closed)
+        self.assertTrue(wait_for(lambda: servo.closed))
+
+    def test_closing_stops_when_the_lid_presses_the_button(self):
+        self.factory.pressed = lambda angle: angle is not None and angle >= 120
+        c = Controller(OutputConfig([OutputRule(1, "servo", 18, 70, 125, 23)]), factory=self.factory)
+        self.addCleanup(c.close)
+        self.assertTrue(c.arm())
+        lid, servo = c._devices[1], self.factory.devices[18]
+        self.assertEqual(self.factory.button_kwargs, {"pull_up": True})
+        # At start-up it homes from the open angle, like the Arduino bin.
+        self.closed(lid)
+        self.assertEqual(servo.events[0], 70)
+        self.assertEqual(lid.found, 120)
+        self.assertEqual(max(e for e in servo.events if e is not None), 120)
+        self.assertIsNone(servo.angle)
+        c.update(1)
+        self.assertEqual(servo.angle, 70)
+        c.update(None)
+        self.closed(lid)
+        self.assertEqual(lid.found, 120)
+        self.assertEqual(lid.fault, "")
+
+    def test_button_that_never_presses_rests_at_the_saved_angle_with_a_warning(self):
+        c = Controller(OutputConfig([OutputRule(1, "servo", 18, 70, 125, 23)]), factory=self.factory)
+        self.addCleanup(c.close)
+        self.assertTrue(c.arm())
+        lid, servo = c._devices[1], self.factory.devices[18]
+        self.closed(lid)
+        moved = [e for e in servo.events if e is not None]
+        self.assertEqual(max(moved), 140)     # 15° past the saved angle, never further
+        self.assertEqual(moved[-1], 125)      # then rests at the saved closed angle
+        self.assertIn("button didn't press", lid.fault)
+        self.assertIn("⚠", c.state_text)
+
+    def test_lid_stays_open_a_moment_and_a_stuck_button_is_reported(self):
+        ServoDriver.HOLD_OPEN_SECONDS = .3
+        self.factory.pressed = lambda angle: True   # stuck down
+        lid = ServoDriver(FakeDevice(18), 70, 125, FakeButton(self.factory, 23), home=False)
+        self.addCleanup(lid.stop_now)
+        self.factory.servo = lid.servo
+        lid.open(); lid.close()
+        time.sleep(.1)
+        self.assertEqual(lid.state, "open")
+        self.assertTrue(wait_for(lambda: "still pressed" in lid.fault))
+
+    def test_already_shut_lid_does_not_move_when_armed(self):
+        self.factory.pressed = lambda angle: True
+        c = Controller(OutputConfig([OutputRule(1, "servo", 18, 70, 125, 23)]), factory=self.factory)
+        self.addCleanup(c.close)
+        self.assertTrue(c.arm())
+        time.sleep(.05)
+        self.assertEqual(self.factory.devices[18].events, [])
+        self.assertEqual(c._devices[1].state, "closed")
 
     def test_configure_releases_old_devices_before_changing_pins_and_copies_settings(self):
         c = self.controller
@@ -169,16 +290,28 @@ class ControllerTests(unittest.TestCase):
         old_devices = list(self.factory.devices.values())
         config = OutputConfig([OutputRule(0, "servo", 22, 120, 20), OutputRule(1, "led", 23)])
         c.configure(config)
-        self.assertTrue(all(d.closed for d in old_devices))
         self.assertFalse(c.armed)
+        self.assertTrue(wait_for(lambda: all(d.closed for d in old_devices)))
+        self.assertFalse(c.lid_closing)
         config.rules[0].pin = 99
         self.assertEqual(c.config.rules[0].pin, 22)
         self.assertTrue(c.arm())
         c.update(0)
         self.assertEqual(self.factory.devices[22].angle, 120)
         c.update(1)
-        self.assertEqual(self.factory.devices[22].angle, 20)
+        self.closed(c._devices[0])
+        self.assertEqual(self.factory.devices[22].last, 20)
         self.assertEqual(self.factory.devices[23].value, 1)
+
+    def test_rearming_waits_for_a_closing_lid(self):
+        c = self.controller
+        ServoDriver.STEP_SECONDS = .01
+        c.arm(); c.update(1); c.disarm()     # the lid now sweeps 90° closed
+        self.assertTrue(c.lid_closing)
+        self.assertFalse(c.arm())
+        self.assertIn("still closing", c.error)
+        self.assertTrue(wait_for(lambda: not c.lid_closing, 5))
+        self.assertTrue(c.arm())
 
     def test_actual_gpiozero_mock_led_toggles_and_stops_flashing(self):
         from gpiozero import LED
@@ -207,7 +340,7 @@ class ControllerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             c.configure(OutputConfig([OutputRule(0, "led", -1)]))
         self.assertFalse(c.armed)
-        self.assertTrue(all(d.closed for d in self.factory.devices.values()))
+        self.assertTrue(wait_for(lambda: all(d.closed for d in self.factory.devices.values())))
 
     def test_partial_start_and_write_faults_release_all_devices_and_require_rearm(self):
         c = self.controller
@@ -223,16 +356,27 @@ class ControllerTests(unittest.TestCase):
         led.fail_on = True
         c.update(0)
         self.assertFalse(c.armed)
-        self.assertTrue(led.closed and servo.closed)
+        self.assertTrue(led.closed)
+        self.assertTrue(wait_for(lambda: servo.closed))
         self.assertIn("lost GPIO", c.error)
         c.disarm()
         self.assertIn("lost GPIO", c.error)
         c.update(1)
         self.assertFalse(c.armed)
-        self.assertEqual(servo.angle, 0)
         self.assertTrue(c.arm())
         self.assertEqual(c.error, "")
-        self.assertEqual(self.factory.devices[18].angle, 0)
+
+    def test_servo_write_fault_in_the_lid_thread_stops_outputs(self):
+        c = self.controller
+        self.assertTrue(c.arm())
+        servo = self.factory.devices[18]
+        self.closed(c._devices[1])
+        c.update(1)
+        servo.fail_on = True
+        c.update(0)                           # the sweep fails on its first step
+        self.assertTrue(wait_for(lambda: not c.armed))
+        self.assertIn("lost PWM", c.error)
+        self.assertTrue(wait_for(lambda: servo.closed))
 
     def test_cleanup_continues_when_one_output_cannot_rest(self):
         c = self.controller
@@ -240,7 +384,8 @@ class ControllerTests(unittest.TestCase):
         led, servo = self.factory.devices[17], self.factory.devices[18]
         led.fail_rest = True
         c.disarm()
-        self.assertTrue(led.closed and servo.closed)
+        self.assertTrue(led.closed)
+        self.assertTrue(wait_for(lambda: servo.closed))
         self.assertIn("rest failed", c.error)
 
     def test_watchdog_disarms_without_tk_and_does_not_rearm_on_prediction(self):
@@ -255,7 +400,8 @@ class ControllerTests(unittest.TestCase):
             time.sleep(.01)
         self.assertFalse(c.armed)
         self.assertIn("No fresh decisions", c.error)
-        self.assertTrue(all(d.closed for d in devices))
+        self.assertTrue(wait_for(lambda: all(d.closed for d in devices)))
+        self.assertEqual(self.factory.devices[18].last, 0)   # the open lid closed first
         c.update(1)
         self.assertFalse(c.armed)
         self.assertTrue(c.arm())
@@ -267,11 +413,12 @@ class ControllerTests(unittest.TestCase):
     def test_wrong_or_unknown_item_flashes_led_and_never_opens_servo(self):
         c=self.controller
         self.assertTrue(c.arm())
-        led,servo=self.factory.devices[17],self.factory.devices[18]
+        led,servo,lid=self.factory.devices[17],self.factory.devices[18],c._devices[1]
         c.update(1)
         self.assertEqual(servo.angle,90)
         c.update(None,rejected=True)
-        self.assertEqual(servo.angle,0)
+        self.closed(lid)
+        self.assertEqual(servo.last,0)
         self.assertEqual(led.events[-1],"blink")
         self.assertIn("FLASHING",c.state_text)
         before=list(led.events)
@@ -279,9 +426,9 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(led.events,before)
         c.update(None)
         self.assertEqual(led.events[-1],"off")
-        self.assertEqual(servo.angle,0)
         c.update(0)
         self.assertEqual(led.events[-1],"blink")
+        self.assertEqual(lid.state,"closed")
         c.update(1)
         self.assertEqual(led.events[-1],"off")
         self.assertEqual(servo.angle,90)
@@ -297,34 +444,84 @@ class ControllerTests(unittest.TestCase):
         self.assertFalse(c._watchdog.is_alive())
 
     def test_gpiozero_mock_pwm_and_pin_reservations(self):
-        from gpiozero import LED, AngularServo
+        from gpiozero import LED, AngularServo, InputDevice
         from gpiozero.pins.mock import MockFactory, MockPWMPin
         from gpiozero.exc import PWMSoftwareFallback
         pins = MockFactory(pin_class=MockPWMPin)
         factory = SimpleNamespace(
             LED=lambda *a, **kw: LED(*a, pin_factory=pins, **kw),
             AngularServo=lambda *a, **kw: AngularServo(*a, pin_factory=pins, **kw),
+            InputDevice=lambda *a, **kw: InputDevice(*a, pin_factory=pins, **kw),
         )
-        c = Controller(factory=factory)
+        config = OutputConfig([OutputRule(0, "led", 17), OutputRule(1, "servo", 18, 90, 0, 23)])
+        c = Controller(config, factory=factory)
         self.addCleanup(c.close)
         with warnings.catch_warnings():
             warnings.simplefilter('ignore', PWMSoftwareFallback)
             self.assertTrue(c.arm(), c.error)
+        self.assertFalse(c._devices[1].pressed())   # the Pi's pull-up: not pressed
+        pins.pin(23).drive_low()   # the lid shuts: the button joins GPIO23 to GND
+        self.assertTrue(c._devices[1].pressed())
+        self.closed(c._devices[1])
         c.update(1)
-        self.assertAlmostEqual(c._devices[1].angle, 90)
-        self.assertGreater(pins.pin(18).state, 0)
+        self.assertAlmostEqual(pins.pin(18).state, .075)
+        pins.pin(23).drive_high()  # the lid lifts off the button
         c.update(0)
         self.assertIsNotNone(c._devices[0]._blink_thread)
-        self.assertAlmostEqual(c._devices[1].angle, 0)
+        self.assertTrue(wait_for(lambda: c._devices[1].position <= 45))
+        pins.pin(23).drive_low()   # ...and presses it again on the way down
+        self.closed(c._devices[1])
+        self.assertGreater(c._devices[1].found, 30)
+        self.assertEqual(pins.pin(18).state, 0)   # limp
         c.neutral()
         self.assertFalse(pins.pin(17).state)
         c.close()
-        # Reclaiming both pins demonstrates release of gpiozero reservations.
+        # Reclaiming every pin demonstrates release of gpiozero reservations.
         led = LED(17, pin_factory=pins)
+        button = InputDevice(23, pin_factory=pins)
         with warnings.catch_warnings():
             warnings.simplefilter('ignore', PWMSoftwareFallback)
             servo = AngularServo(18, pin_factory=pins)
-        led.close(); servo.close()
+        led.close(); servo.close(); button.close()
+
+
+class BinSetupTests(unittest.TestCase):
+    def setUp(self):
+        fast_servo(self)
+
+    def test_finds_closed_then_opens_in_five_degree_steps_and_tests(self):
+        sim = SimulatedBin(closed_at=120)
+        setup = BinSetup(sim, 18, 23, closes_up=True, start_angle=90)
+        self.addCleanup(lambda: setup.release().join(3))
+        self.assertTrue(setup.find_closed())
+        self.assertTrue(wait_for(lambda: setup.lid.state == "closed"))
+        self.assertEqual(setup.closed_angle, 120)
+        self.assertTrue(setup.pressed)
+        self.assertFalse(setup.ready)
+        setup.open_by(-1)                       # never closer than 5° from closed
+        self.assertEqual(setup.open_angle, 115)
+        for _ in range(9): setup.open_by(1)
+        self.assertEqual(setup.open_angle, 70)
+        self.assertEqual(sim.servo.last, 70)
+        setup.open_by(-1)
+        self.assertEqual(setup.open_angle, 75)
+        self.assertTrue(setup.test_cycle())
+        self.assertTrue(wait_for(lambda: setup.lid.state == "closed"))
+        self.assertEqual(setup.lid.found, 120)
+        rule = setup.rule(1)
+        self.assertEqual((rule.pin, rule.button_pin, rule.active_angle, rule.rest_angle), (18, 23, 75, 120))
+        validate_config(OutputConfig([rule]))
+
+    def test_wrong_direction_reaches_the_end_without_a_press(self):
+        sim = SimulatedBin(closed_at=120)
+        setup = BinSetup(sim, 18, 23, closes_up=False, start_angle=90)
+        self.addCleanup(lambda: setup.release().join(3))
+        setup.find_closed()
+        self.assertTrue(wait_for(lambda: setup.lid.state == "closed"))
+        self.assertIsNone(setup.closed_angle)
+        self.assertEqual(sim.servo.last, 0)
+        self.assertIn("didn't press", setup.lid.fault)
+        self.assertFalse(setup.open_by(1))
 
 
 if __name__ == '__main__':

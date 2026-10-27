@@ -16,7 +16,7 @@ class OutputDialog(tk.Toplevel):
         self.app = app
         self.title("WastePath · GPIO outputs")
         self.configure(bg="#C0C0C0")
-        self.geometry("790x555")
+        self.geometry("790x620")
         self.resizable(False, False)
         self.transient(app)
         self.rows = []
@@ -33,7 +33,8 @@ class OutputDialog(tk.Toplevel):
             box.pack(fill="x",padx=14,pady=5)
             variables={"kind":tk.StringVar(value=rule.kind),"pin":tk.StringVar(value=str(rule.pin)),
                        "active_angle":tk.StringVar(value=str(rule.active_angle)),
-                       "rest_angle":tk.StringVar(value=str(rule.rest_angle))}
+                       "rest_angle":tk.StringVar(value=str(rule.rest_angle)),
+                       "button_pin":tk.StringVar(value=str(rule.button_pin) if rule.button_pin else "none")}
             tk.Label(box,text="Output",bg="#C0C0C0").grid(row=0,column=0,sticky="w")
             kind=ttk.Combobox(box,textvariable=variables["kind"],values=("off","led","servo"),state="readonly",width=9)
             kind.grid(row=0,column=1,padx=8)
@@ -41,25 +42,29 @@ class OutputDialog(tk.Toplevel):
             pin=ttk.Combobox(box,textvariable=variables["pin"],values=tuple(HEADER_PINS),width=5)
             pin.grid(row=0,column=3,padx=8)
             physical=tk.Label(box,text="",bg="#C0C0C0"); physical.grid(row=0,column=4,sticky="w")
-            tk.Label(box,text="Servo angle when detected",bg="#C0C0C0").grid(row=1,column=0,columnspan=2,sticky="w",pady=(10,0))
+            tk.Label(box,text="Servo open angle",bg="#C0C0C0").grid(row=1,column=0,columnspan=2,sticky="w",pady=(10,0))
             active=tk.Entry(box,textvariable=variables["active_angle"],width=6)
             active.grid(row=1,column=2,pady=(10,0))
-            tk.Label(box,text="Rest angle",bg="#C0C0C0").grid(row=1,column=3,pady=(10,0))
+            tk.Label(box,text="Closed angle",bg="#C0C0C0").grid(row=1,column=3,pady=(10,0))
             rest=tk.Entry(box,textvariable=variables["rest_angle"],width=6)
             rest.grid(row=1,column=4,pady=(10,0))
-            def refresh(*_,v=variables,physical=physical,active=active,rest=rest,pin=pin):
+            tk.Label(box,text="Closed button GPIO",bg="#C0C0C0").grid(row=2,column=0,columnspan=2,sticky="w",pady=(6,0))
+            button=ttk.Combobox(box,textvariable=variables["button_pin"],values=("none",)+tuple(HEADER_PINS),width=5)
+            button.grid(row=2,column=2,pady=(6,0))
+            tk.Label(box,text="Use 4. Set up bin to find these angles with the button.",bg="#C0C0C0",fg="#3C3C3C").grid(row=2,column=3,columnspan=2,sticky="w",pady=(6,0))
+            def refresh(*_,v=variables,physical=physical,active=active,rest=rest,pin=pin,button=button):
                 try: text=f"Physical pin {HEADER_PINS[int(v['pin'].get())]}"
                 except (ValueError,KeyError): text="Choose GPIO 2–27"
                 physical.configure(text=text)
                 state="normal" if v["kind"].get()=="servo" else "disabled"
-                active.configure(state=state); rest.configure(state=state)
+                active.configure(state=state); rest.configure(state=state); button.configure(state=state)
                 pin.configure(state="disabled" if v["kind"].get()=="off" else "normal")
             variables["kind"].trace_add("write",refresh)
             variables["pin"].trace_add("write",refresh)
             refresh()
             self.rows.append(variables)
         tk.Label(self,text="An LED flashes for its category AND unrecognised items. A servo opens only\n"
-                 "for its recognised category. Empty table: LED off and servo at rest.\n"
+                 "for its recognised category, then closes slowly until the lid presses its closed button.\n"
                  "Real outputs run only in Live. Servo power: use a suitable external supply and share its ground with the Pi.\n"
                  "Use a resistor with the LED. Disconnect power before changing wires.",
                  bg="#FFFFE1",justify="left",anchor="w",padx=10,pady=8).pack(fill="x",padx=14,pady=10)
@@ -78,7 +83,9 @@ class OutputDialog(tk.Toplevel):
             pin=int(v['pin'].get()) if kind!="off" else (17 if label==0 else 18)
             active=float(v['active_angle'].get()) if kind=="servo" else 90
             rest=float(v['rest_angle'].get()) if kind=="servo" else 0
-            rules.append(OutputRule(label,kind,pin,active,rest))
+            text=v['button_pin'].get().strip().lower()
+            button=int(text) if kind=="servo" and text not in ("","none","0") else 0
+            rules.append(OutputRule(label,kind,pin,active,rest,button))
         config=OutputConfig(rules)
         validate_config(config)
         return config

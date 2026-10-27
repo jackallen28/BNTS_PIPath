@@ -35,6 +35,15 @@ class WorkshopTests(unittest.TestCase):
         self.app.after=lambda *args:None
         self.app.geometry("1024x640")
         self.app.update_idletasks()
+        from wastepath.outputs import ServoDriver
+        for name,value in (("STEP_SECONDS",.001),("SETTLE_SECONDS",.01),("HOLD_OPEN_SECONDS",0)):
+            self.addCleanup(setattr,ServoDriver,name,getattr(ServoDriver,name))
+            setattr(ServoDriver,name,value)
+    def wait(self,condition,seconds=3):
+        deadline=time.monotonic()+seconds
+        while not condition() and time.monotonic()<deadline:
+            self.app.tick(); time.sleep(.005)
+        return condition()
     def tearDown(self):
         self.app.close(); self.patcher.stop(); self.tmp.cleanup()
     def view(self,kind,variation=0):
@@ -228,10 +237,13 @@ class WorkshopTests(unittest.TestCase):
         self.assertIsNotNone(a.outputs._devices[0]._blink_thread)
         self.view("Recycling")
         self.assertEqual(pin_factory.pin(17).state,0)
-        self.assertAlmostEqual(pin_factory.pin(18).state,.075)
+        self.assertAlmostEqual(pin_factory.pin(18).state,.075)   # open at 90°
         self.view("Unknown item")
         self.assertIsNotNone(a.outputs._devices[0]._blink_thread)
-        self.assertAlmostEqual(pin_factory.pin(18).state,.05)
+        lid=a.outputs._devices[1]
+        self.assertTrue(self.wait(lambda:lid.state=="closed"))
+        self.assertEqual(lid.position,0)
+        self.assertEqual(pin_factory.pin(18).state,0)            # closed, then limp
         self.view("Waste")
         self.assertIsNotNone(a.outputs._devices[0]._blink_thread)
         a.show_outputs()
@@ -243,9 +255,75 @@ class WorkshopTests(unittest.TestCase):
         self.assertTrue(a.outputs.armed)
         a.cam.offline=True; a.tick()
         self.assertEqual(pin_factory.pin(17).state,0)
-        self.assertAlmostEqual(pin_factory.pin(18).state,.05)
+        self.assertTrue(self.wait(lambda:a.outputs._devices[1].state=="closed"))
         a.show_step(1)
         self.assertFalse(a.outputs.armed)
         self.assertEqual(pin_factory.pin(17).state,0)
+
+    def test_take_more_photos_after_ten_and_add_more_from_the_quiz(self):
+        a=self.app
+        self.train_workshop()
+        a.show_step(2)
+        a.more_photos("Recycling")
+        self.assertEqual((a.step,a.label_var.get()),(1,"Recycling"))
+        for photo in range(3):
+            self.view("Recycling",photo+3); a.last_capture=0; a.capture()
+        self.assertEqual(a.step,1)                  # no jump away while adding photos
+        self.assertEqual(sum(s.label==1 for s in a.samples),13)
+        self.assertIsNone(a.model)                  # train again to use them
+        self.assertIn("Train again",a.status.get())
+        a.update()
+        self.assertTrue(all(s.thumb is not None for s in a.samples))
+        self.assertIn("+3 extra",[a.cards[1].itemcget(i,"text") for i in a.cards[1].find_all() if a.cards[1].type(i)=="text"])
+        self.assertIn("Both bins are ready",a.counts.cget("text"))
+        a.choose_bin("Waste")
+        self.assertEqual(a.label_var.get(),"Waste")
+        capture=os.environ.get("WASTEPATH_TEST_SCREENSHOT_TEACH")
+        if capture:
+            a.update(); subprocess.run(["import","-window",str(a.winfo_id()),capture],check=True)
+
+    def test_bin_setup_finds_closed_sets_open_and_saves(self):
+        a=self.app
+        self.train_workshop()
+        a.show_step(5)
+        self.assertEqual(a.step,5)
+        a.bin_vars["closes"].set("up")
+        a.bin_find()
+        self.assertTrue(self.wait(lambda:a.bin.closed_angle is not None))
+        self.assertEqual(a.bin.closed_angle,120)
+        self.assertIn("Closed at 120",(a.draw_bin(),a.bin_note.cget("text"))[1])
+        for _ in range(8): a.bin_open(1)
+        self.assertEqual(a.bin.open_angle,80)
+        a.bin_test()
+        self.assertTrue(self.wait(lambda:a.bin.lid.state=="closed" and a.bin.lid.found==120))
+        a.update()
+        capture=os.environ.get("WASTEPATH_TEST_SCREENSHOT_BIN")
+        if capture:
+            a.draw_bin(); a.update(); subprocess.run(["import","-window",str(a.winfo_id()),capture],check=True)
+        a.bin_save()
+        rule=[r for r in a.outputs.config.rules if r.kind=="servo"][0]
+        self.assertEqual((rule.label,rule.pin,rule.button_pin,rule.active_angle,rule.rest_angle),(1,18,23,80,120))
+        self.assertTrue((Path(self.tmp.name)/"outputs.json").exists())
+        self.assertEqual(a.step,4)
+        self.assertIsNone(a.bin)
+        self.assertIn("Bin saved",a.status.get())
+        # The GPIO window keeps the button when saved again.
+        a.show_outputs(); a.output_dialog.apply()
+        self.assertEqual([r for r in a.outputs.config.rules if r.kind=="servo"][0].button_pin,23)
+
+    def test_bin_setup_reports_a_button_that_never_presses(self):
+        a=self.app
+        a.show_step(5)                              # works before the camera is set up
+        self.assertEqual(a.step,5)
+        a.bin_vars["closes"].set("down")            # wrong way for the pretend lid
+        a.bin_find()
+        self.assertTrue(self.wait(lambda:a.bin.lid.state=="closed"))
+        a.draw_bin()
+        self.assertIsNone(a.bin.closed_angle)
+        self.assertIn("didn't press",a.bin_note.cget("text"))
+        self.assertEqual(str(a.bin_buttons["save"].cget("state")),"disabled")
+        a.bin_vars["button"].set("18")              # same pin as the servo
+        a.release_bin(); a.bin_find()
+        self.assertIn("different BCM pin",a.status.get())
 
 if __name__=="__main__": unittest.main()

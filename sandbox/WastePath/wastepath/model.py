@@ -1,5 +1,5 @@
 """The supplied ML Camera's colour/shape scaling, weighted kNN and novelty check."""
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
 import time
 import numpy as np
@@ -14,6 +14,7 @@ class Sample:
     feature: np.ndarray
     label: int
     group: str = ""
+    thumb: object = field(default=None, repr=False, compare=False)  # small picture, this session only
 
 @dataclass
 class Prediction:
