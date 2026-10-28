@@ -1,0 +1,60 @@
+[
+  {
+    "file": "actual-app-taking-photos.png",
+    "description": "Actual Teach screen after ten Waste and six Recycling captures",
+    "step": 1,
+    "photo_counts": [
+      10,
+      6
+    ],
+    "training_busy": false,
+    "camera": "unmodified built-in demo",
+    "gpio_enabled": false
+  },
+  {
+    "file": "actual-app-training-ready.png",
+    "description": "Actual Train screen with twenty captured examples, before starting training",
+    "step": 2,
+    "photo_counts": [
+      10,
+      10
+    ],
+    "training_busy": false,
+    "camera": "unmodified built-in demo",
+    "gpio_enabled": false
+  },
+  {
+    "file": "actual-app-training.png",
+    "description": "Actual Train screen immediately after pressing Train and quiz; no UI or worker delays injected",
+    "step": 2,
+    "photo_counts": [
+      10,
+      10
+    ],
+    "training_busy": true,
+    "camera": "unmodified built-in demo",
+    "gpio_enabled": false
+  },
+  {
+    "training_completed": true,
+    "quiz": [
+      {
+        "label": 0,
+        "group": "Waste",
+        "total": 10,
+        "correct": 10,
+        "withheld": 0,
+        "wrong_bin": 0
+      },
+      {
+        "label": 1,
+        "group": "Recycling",
+        "total": 10,
+        "correct": 10,
+        "withheld": 0,
+        "wrong_bin": 0
+      }
+    ],
+    "examples": 20
+  }
+]

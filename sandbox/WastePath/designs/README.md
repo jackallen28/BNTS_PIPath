@@ -1,7 +1,7 @@
-# WastePath training workspace render
+# Earlier illustrative mockup — not an application screenshot
 
-This is an illustrative design mockup in the PiPath visual style, with example
-Waste/Recycling photo sets, training progress, camera preview and servo/LED actions.
-It is a design render, rather than a screenshot of the currently implemented app.
+The image in this folder was generated as a design concept. Its thumbnail gallery
+and progress bar are not implemented in the current application.
 
-![WastePath training workspace render](training-workspace-render.png)
+For genuine screen captures of the running program, see
+[actual application screenshots](../screenshots/README.md).
