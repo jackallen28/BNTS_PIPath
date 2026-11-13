@@ -1,5 +1,10 @@
 # PiPath
 
+> **Looking for the newest version?** Circuit Pathways now also runs as a website (PiPath **and** ArduinoPath in the
+> browser, with classes, a Pi beta and Grove kits): see
+> [BNTS_Circuit_Pathways](https://github.com/jackallen28/BNTS_Circuit_Pathways). This repository is the stand-alone
+> PiPath you install on a Raspberry Pi (no internet needed), and the home of the WastePath work.
+
 A Python coding tutor for Raspberry Pi with a classic Windows 95/98 look, in the colours of the
 Banyule Nillumbik Tech School. Students log in with their **first name and school**
 (up to four names on one profile when they share a Pi), then choose any activity: screen-only
